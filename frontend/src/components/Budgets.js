@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
-import { fetchBudgets, createBudget } from "../api/budgets";
+import { fetchBudgets, createBudget, updateBudget, deleteBudget } from "../api/budgets";
 
 export default function Budgets() {
   const [budgets, setBudgets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editLimit, setEditLimit] = useState("");
+  const [editCategory, setEditCategory] = useState("");
 
   const [form, setForm] = useState({
     category: "Food & Dining",
@@ -41,6 +44,41 @@ export default function Budgets() {
       alert("Failed to create budget");
     }
   };
+  const startEdit = (b) => {
+    setEditingId(b.id);
+    setEditLimit(b.limit_amount);
+    setEditCategory(b.category);
+  };
+
+  const saveEdit = async (id) => {
+        try {
+            await updateBudget(id, {
+            category: editCategory,
+            limit_amount: Number(editLimit)
+        });
+            setEditingId(null);
+            loadBudgets();
+        } catch {
+            alert("Failed to update budget");
+        }
+    };
+
+    const cancelEdit = () => {
+        setEditingId(null);
+        setEditLimit("");
+    };
+
+    const handleDelete = async (id) => {
+        if (!window.confirm("Delete this budget?")) return;
+
+        try {
+            await deleteBudget(id);
+            loadBudgets();
+        } catch {
+            alert("Failed to delete budget");
+        }
+};
+
 
   if (loading) return <p className="p-6">Loading budgets…</p>;
   if (error) return <p className="p-6 text-red-500">{error}</p>;
@@ -78,39 +116,87 @@ export default function Budgets() {
 
       {/* Budget List */}
       <ul className="space-y-3">
-        {budgets.map((b) => {
-          const percent =
+            {budgets.map((b) => {
+            const percent =
             b.limit_amount === 0
-              ? 0
-              : Math.round((b.spent / b.limit_amount) * 100);
+                ? 0
+                : Math.round((b.spent / b.limit_amount) * 100);
 
-          let color = "bg-green-500";
-          if (percent > 80) color = "bg-yellow-500";
-          if (percent >= 100) color = "bg-red-600";
+            let color = "bg-green-500";
+            if (percent > 80) color = "bg-yellow-500";
+            if (percent >= 100) color = "bg-red-600";
 
-          return (
+            return (
             <li key={b.id} className="border rounded p-4">
-              <div className="flex justify-between mb-2">
+                <div className="flex justify-between items-center mb-2">
                 <span className="font-medium">{b.category}</span>
-                <span>
-                  ₹{b.spent} / ₹{b.limit_amount}
-                </span>
-              </div>
 
-              <div className="w-full bg-gray-200 rounded h-2">
+                {editingId === b.id ? (
+                    <div className="flex gap-2">
+                    <input
+                        type="number"
+                        value={editLimit}
+                        onChange={(e) => setEditLimit(e.target.value)}
+                        className="border p-1 w-24"
+                    />
+                    <button
+                        onClick={() => saveEdit(b.id)}
+                        className="text-green-600"
+                    >
+                        Save
+                    </button>
+                    <button
+                        onClick={cancelEdit}
+                        className="text-gray-500"
+                    >
+                        Cancel
+                    </button>
+                    </div>
+                ) : (
+                    <div className="flex gap-3">
+                    <span>
+                        ₹{b.spent} / ₹{b.limit_amount}
+                    </span>
+                    <button
+                        onClick={() => startEdit(b)}
+                        className="text-blue-600"
+                    >
+                        Edit
+                    </button>
+                    <button
+                        onClick={() => handleDelete(b.id)}
+                        className="text-red-600"
+                    >
+                        Delete
+                    </button>
+                    </div>
+                )}
+                {editingId === b.id ? (
+                    <input
+                        value={editCategory}
+                        onChange={(e) => setEditCategory(e.target.value)}
+                        className="border p-1"
+                    />
+                    ) : (
+                    <span className="font-medium">{b.category}</span>
+                )}
+                </div>
+
+                <div className="w-full bg-gray-200 rounded h-2">
                 <div
-                  className={`${color} h-2 rounded`}
-                  style={{ width: `${Math.min(percent, 100)}%` }}
+                    className={`${color} h-2 rounded`}
+                    style={{ width: `${Math.min(percent, 100)}%` }}
                 />
-              </div>
+                </div>
 
-              <p className="text-sm text-gray-500 mt-1">
+                <p className="text-sm text-gray-500 mt-1">
                 {percent}% used
-              </p>
+                </p>
             </li>
-          );
+            );
         })}
-      </ul>
+        </ul>
+
     </div>
   );
 }
