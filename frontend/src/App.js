@@ -5,6 +5,7 @@ import Dashboard from "./components/Dashboard";
 import PrivateRoute from "./components/PrivateRoute";
 import Register from "./pages/Register";
 import Transactions from "./pages/Transactions";
+import Budgets from "./components/Budgets";
 
 function App() {
   return (
@@ -29,9 +30,18 @@ function App() {
               </PrivateRoute>
             }
           />
-
+          <Route
+          path="/budgets"
+          element={
+            <PrivateRoute>
+              <Budgets />
+            </PrivateRoute>
+          }
+        />
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>
+        
+
       </BrowserRouter>
     </AuthProvider>
   );
