@@ -1,0 +1,689 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from werkzeug.security import generate_password_hash, check_password_hash
+import mysql.connector
+from mysql.connector import Error
+from datetime import datetime, timedelta
+import numpy as np
+from sklearn.linear_model import LinearRegression
+import pandas as pd
+import os
+
+app = Flask(__name__)
+app.config['JWT_SECRET_KEY'] = 'your-secret-key-change-in-production'
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+
+CORS(app)
+jwt = JWTManager(app)
+
+# Database configuration
+DB_CONFIG = {
+    'host': 'localhost',
+    'database': 'finance_tracker_p3',
+    'user': 'root',
+    'password': 'root@123'
+}
+
+def get_db_connection():
+    try:
+        connection = mysql.connector.connect(**DB_CONFIG)
+        return connection
+    except Error as e:
+        print(f"Error connecting to MySQL: {e}")
+        return None
+
+# ==================== Authentication Routes ====================
+
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+    name = data.get('name')
+    
+    if not email or not password or not name:
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor()
+        
+        # Check if user exists
+        cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
+        if cursor.fetchone():
+            return jsonify({'error': 'User already exists'}), 409
+        
+        # Create user
+        hashed_password = generate_password_hash(password)
+        cursor.execute(
+            "INSERT INTO users (email, password_hash, name) VALUES (%s, %s, %s)",
+            (email, hashed_password, name)
+        )
+        connection.commit()
+        user_id = cursor.lastrowid
+        
+        access_token = create_access_token(identity=str(user_id))
+        return jsonify({
+            'message': 'User created successfully',
+            'access_token': access_token,
+            'user': {'id': user_id, 'email': email, 'name': name}
+        }), 201
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+    
+    if not email or not password:
+        return jsonify({'error': 'Missing credentials'}), 400
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT id, email, password_hash, name FROM users WHERE email = %s",
+            (email,)
+        )
+        user = cursor.fetchone()
+        
+        if not user or not check_password_hash(user['password_hash'], password):
+            return jsonify({'error': 'Invalid credentials'}), 401
+        
+        access_token = create_access_token(identity=str(user['id']))
+        return jsonify({
+            'access_token': access_token,
+            'user': {'id': user['id'], 'email': user['email'], 'name': user['name']}
+        }), 200
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+# ==================== Transaction Routes ====================
+
+@app.route('/api/transactions', methods=['GET'])
+@jwt_required()
+def get_transactions():
+    print("REached get_transactions")
+    user_id = int(get_jwt_identity())
+    print(1)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        query = "SELECT * FROM transactions WHERE user_id = %s"
+        params = [user_id]
+        
+        if start_date:
+            query += " AND transaction_date >= %s"
+            params.append(start_date)
+        if end_date:
+            query += " AND transaction_date <= %s"
+            params.append(end_date)
+        
+        query += " ORDER BY transaction_date DESC"
+        cursor.execute(query, params)
+        transactions = cursor.fetchall()
+        
+        return jsonify(transactions), 200
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/transactions', methods=['POST'])
+@jwt_required()
+def create_transaction():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    required_fields = ['type', 'category', 'amount', 'transaction_date']
+    if not all(field in data for field in required_fields):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """INSERT INTO transactions 
+            (user_id, type, category, amount, transaction_date, description, merchant)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (user_id, data['type'], data['category'], data['amount'],
+             data['transaction_date'], data.get('description'), data.get('merchant'))
+        )
+        connection.commit()
+        
+        return jsonify({
+            'message': 'Transaction created',
+            'id': cursor.lastrowid
+        }), 201
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/transactions/<int:transaction_id>', methods=['PUT'])
+@jwt_required()
+def update_transaction(transaction_id):
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor()
+        
+        # Verify ownership
+        cursor.execute(
+            "SELECT id FROM transactions WHERE id = %s AND user_id = %s",
+            (transaction_id, user_id)
+        )
+        if not cursor.fetchone():
+            return jsonify({'error': 'Transaction not found'}), 404
+        
+        cursor.execute(
+            """UPDATE transactions SET 
+            type = %s, category = %s, amount = %s, 
+            transaction_date = %s, description = %s, merchant = %s
+            WHERE id = %s AND user_id = %s""",
+            (data.get('type'), data.get('category'), data.get('amount'),
+             data.get('transaction_date'), data.get('description'),
+             data.get('merchant'), transaction_id, user_id)
+        )
+        connection.commit()
+        
+        return jsonify({'message': 'Transaction updated'}), 200
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/transactions/<int:transaction_id>', methods=['DELETE'])
+@jwt_required()
+def delete_transaction(transaction_id):
+    user_id = get_jwt_identity()
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "DELETE FROM transactions WHERE id = %s AND user_id = %s",
+            (transaction_id, user_id)
+        )
+        connection.commit()
+        
+        if cursor.rowcount == 0:
+            return jsonify({'error': 'Transaction not found'}), 404
+        
+        return jsonify({'message': 'Transaction deleted'}), 200
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+# ==================== Budget Routes ====================
+
+@app.route('/api/budgets', methods=['GET'])
+@jwt_required()
+def get_budgets():
+    user_id = get_jwt_identity()
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """SELECT b.*, 
+            COALESCE(SUM(CASE WHEN t.type = 'expense' THEN t.amount ELSE 0 END), 0) as spent
+            FROM budgets b
+            LEFT JOIN transactions t ON t.user_id = b.user_id 
+            AND t.category = b.category 
+            AND MONTH(t.transaction_date) = MONTH(CURRENT_DATE())
+            AND YEAR(t.transaction_date) = YEAR(CURRENT_DATE())
+            WHERE b.user_id = %s
+            GROUP BY b.id""",
+            (user_id,)
+        )
+        budgets = cursor.fetchall()
+        
+        return jsonify(budgets), 200
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/budgets', methods=['POST'])
+@jwt_required()
+def create_budget():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    if not data.get('category') or not data.get('limit_amount'):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "INSERT INTO budgets (user_id, category, limit_amount) VALUES (%s, %s, %s)",
+            (user_id, data['category'], data['limit_amount'])
+        )
+        connection.commit()
+        
+        return jsonify({
+            'message': 'Budget created',
+            'id': cursor.lastrowid
+        }), 201
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/budgets/<int:budget_id>', methods=['PUT'])
+@jwt_required()
+def update_budget(budget_id):
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    if not data.get('category') or not data.get('limit_amount'):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """UPDATE budgets SET 
+            category = %s, limit_amount = %s
+            WHERE id = %s AND user_id = %s""",
+            (data.get('category'), data.get('limit_amount')
+            ,budget_id, user_id)
+        )
+        connection.commit()
+        
+        return jsonify({
+            'message': 'Budget updated',
+            'id': cursor.lastrowid
+        }), 201
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/budgets/<int:budget_id>', methods=['DELETE'])
+@jwt_required()
+def delete_budget(budget_id):
+    user_id = get_jwt_identity()
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """DELETE FROM budgets 
+            WHERE id = %s AND user_id = %s""",
+            (budget_id, user_id)
+        )
+        connection.commit()
+        
+        return jsonify({
+            'message': 'Budget deleted',
+            'id': cursor.lastrowid
+        }), 201
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+# ==================== Savings Goals Routes ====================
+
+@app.route('/api/goals', methods=['GET'])
+@jwt_required()
+def get_goals():
+    user_id = get_jwt_identity()
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT * FROM savings_goals WHERE user_id = %s ORDER BY deadline ASC",
+            (user_id,)
+        )
+        goals = cursor.fetchall()
+        
+        return jsonify(goals), 200
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/goals', methods=['POST'])
+@jwt_required()
+def create_goal():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    required_fields = ['goal_name', 'target_amount', 'deadline']
+    if not all(field in data for field in required_fields):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """INSERT INTO savings_goals 
+            (user_id, goal_name, target_amount, current_amount, deadline)
+            VALUES (%s, %s, %s, %s, %s)""",
+            (user_id, data['goal_name'], data['target_amount'],
+             data.get('current_amount', 0), data['deadline'])
+        )
+        connection.commit()
+        
+        return jsonify({
+            'message': 'Goal created',
+            'id': cursor.lastrowid
+        }), 201
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/goals/<int:goal_id>', methods=['PUT'])
+@jwt_required()
+def update_goal(goal_id):
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    required_fields = ['goal_name', 'target_amount', 'deadline']
+    if not all(field in data for field in required_fields):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """UPDATE savings_goals 
+            SET goal_name=%s, target_amount=%s, current_amount=%s, deadline=%s
+            WHERE user_id=%s AND id=%s""",
+            (data['goal_name'], data['target_amount'],
+             data.get('current_amount', 0), data['deadline'],user_id,goal_id)
+        )
+        connection.commit()
+        
+        return jsonify({
+            'message': 'Goal updated',
+            'id': cursor.lastrowid
+        }), 201
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.route('/api/goals/<int:goal_id>', methods=['DELETE'])
+@jwt_required()
+def delete_goal(goal_id):
+    user_id = get_jwt_identity()
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """DELETE FROM savings_goals 
+            WHERE user_id=%s AND id=%s
+            """,
+            (user_id,goal_id)
+        )
+        connection.commit()
+        
+        return jsonify({
+            'message': 'Goal deleted',
+            'id': cursor.lastrowid
+        }), 201
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+# ==================== Analytics & Predictions ====================
+
+@app.route('/api/analytics/dashboard', methods=['GET'])
+@jwt_required()
+def get_dashboard_analytics():
+    user_id = get_jwt_identity()
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        
+        # Current month statistics
+        cursor.execute(
+            """SELECT 
+            SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as total_income,
+            SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as total_expenses,
+            COUNT(*) as transaction_count
+            FROM transactions 
+            WHERE user_id = %s 
+            AND MONTH(transaction_date) = MONTH(CURRENT_DATE())
+            AND YEAR(transaction_date) = YEAR(CURRENT_DATE())""",
+            (user_id,)
+        )
+        monthly_stats = cursor.fetchone()
+        
+        # Category breakdown
+        cursor.execute(
+            """SELECT category, SUM(amount) as total
+            FROM transactions
+            WHERE user_id = %s 
+            AND type = 'expense'
+            AND MONTH(transaction_date) = MONTH(CURRENT_DATE())
+            AND YEAR(transaction_date) = YEAR(CURRENT_DATE())
+            GROUP BY category
+            ORDER BY total DESC""",
+            (user_id,)
+        )
+        category_breakdown = cursor.fetchall()
+        
+        return jsonify({
+            'monthly_stats': monthly_stats,
+            'category_breakdown': category_breakdown
+        }), 200
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/predictions/cashflow', methods=['GET'])
+@jwt_required()
+def predict_cashflow():
+    user_id = get_jwt_identity()
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        
+        # Get last 6 months of data
+        cursor.execute(
+            """SELECT 
+            DATE_FORMAT(transaction_date, '%Y-%m') as month,
+            SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
+            SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expenses
+            FROM transactions
+            WHERE user_id = %s
+            AND transaction_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 6 MONTH)
+            GROUP BY DATE_FORMAT(transaction_date, '%Y-%m')
+            ORDER BY month ASC""",
+            (user_id,)
+        )
+        historical_data = cursor.fetchall()
+        
+        if len(historical_data) < 2:
+            return jsonify({'error': 'Insufficient data for prediction'}), 400
+        
+        # Simple linear regression for prediction
+        df = pd.DataFrame(historical_data)
+        df['month_num'] = range(len(df))
+        
+        # Predict expenses
+        X = df[['month_num']].values
+        y_expenses = df['expenses'].values
+        
+        model = LinearRegression()
+        model.fit(X, y_expenses)
+        
+        next_month = len(df)
+        predicted_expenses = model.predict([[next_month]])[0]
+        
+        # Average income for prediction
+        avg_income = df['income'].mean()
+        
+        predicted_balance = avg_income - predicted_expenses
+        
+        return jsonify({
+            'predicted_expenses': round(predicted_expenses, 2),
+            'predicted_income': round(avg_income, 2),
+            'predicted_balance': round(predicted_balance, 2),
+            'confidence': 'medium',
+            'historical_data': historical_data
+        }), 200
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+@app.route('/api/insights/spending-patterns', methods=['GET'])
+@jwt_required()
+def get_spending_patterns():
+    user_id = get_jwt_identity()
+    
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        
+        # Day of week analysis
+        cursor.execute(
+            """SELECT 
+            DAYNAME(transaction_date) as day_of_week,
+            COUNT(*) as transaction_count,
+            SUM(amount) as total_amount
+            FROM transactions
+            WHERE user_id = %s AND type = 'expense'
+            GROUP BY DAYNAME(transaction_date)
+            ORDER BY FIELD(DAYNAME(transaction_date), 
+                'Monday', 'Tuesday', 'Wednesday', 'Thursday', 
+                'Friday', 'Saturday', 'Sunday')""",
+            (user_id,)
+        )
+        day_patterns = cursor.fetchall()
+        
+        # Top merchants
+        cursor.execute(
+            """SELECT merchant, COUNT(*) as visits, SUM(amount) as total_spent
+            FROM transactions
+            WHERE user_id = %s AND type = 'expense' AND merchant IS NOT NULL
+            GROUP BY merchant
+            ORDER BY total_spent DESC
+            LIMIT 10""",
+            (user_id,)
+        )
+        top_merchants = cursor.fetchall()
+        
+        return jsonify({
+            'day_patterns': day_patterns,
+            'top_merchants': top_merchants
+        }), 200
+        
+    except Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)

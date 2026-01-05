@@ -1,0 +1,24 @@
+# ---------- Node ----------
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# ---------- React ----------
+frontend/build/
+frontend/.env
+
+# ---------- Python ----------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+venv/
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+
+# ---------- VS Code ----------
+.vscode/
