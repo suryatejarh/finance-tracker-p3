@@ -6,6 +6,7 @@ import PrivateRoute from "./components/PrivateRoute";
 import Register from "./pages/Register";
 import Transactions from "./pages/Transactions";
 import Budgets from "./components/Budgets";
+import Predictions from "./pages/Predictions";
 
 function App() {
   return (
@@ -38,6 +39,15 @@ function App() {
             </PrivateRoute>
           }
         />
+        <Route
+          path="/predictions"
+          element={
+            <PrivateRoute>
+              <Predictions />
+            </PrivateRoute>
+          }
+        />
+
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>
         
