@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { fetchTransactions, createTransaction } from "../api/transactions";
+import { updateTransaction, deleteTransaction } from "../api/transactions";
 
 export default function Transactions() {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({});
 
   const [form, setForm] = useState({
     type: "expense",
@@ -57,6 +60,45 @@ export default function Transactions() {
       alert("Failed to add transaction");
     }
   };
+  const handleDelete = async (id) => {
+  if (!window.confirm("Delete this transaction?")) return;
+
+  try {
+    await deleteTransaction(id);
+    loadTransactions();
+  } catch {
+    alert("Failed to delete transaction");
+  }
+ };
+
+ const startEdit = (t) => {
+  setEditingId(t.id);
+  setEditForm({
+    type: t.type,
+    category: t.category,
+    amount: t.amount,
+    transaction_date: t.transaction_date,
+    description: t.description || "",
+    merchant: t.merchant || "",
+  });
+ };
+  
+ const saveEdit = async (id) => {
+  try {
+    await updateTransaction(id, editForm);
+    setEditingId(null);
+    loadTransactions();
+  } catch {
+    alert("Failed to update transaction");
+  }
+ };
+ 
+ const cancelEdit = () => {
+  setEditingId(null);
+  setEditForm({});
+ };
+
+
 
   if (loading) return <p className="p-6">Loading…</p>;
   if (error) return <p className="p-6 text-red-500">{error}</p>;
@@ -122,29 +164,108 @@ export default function Transactions() {
       {/* Transactions List */}
       <ul className="space-y-2">
         {transactions.map((t) => (
-          <li
-            key={t.id}
-            className="border p-3 flex justify-between rounded"
-          >
-            <div>
-              <p className="font-medium">
-                {t.description || t.category}
-              </p>
-              <p className="text-sm text-gray-500">
-                {t.category} • {t.transaction_date}
-              </p>
-            </div>
+            <li key={t.id} className="border p-3 rounded">
+            {editingId === t.id ? (
+                <>
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                    <select
+                    value={editForm.type}
+                    onChange={(e) =>
+                        setEditForm({ ...editForm, type: e.target.value })
+                    }
+                    className="border p-1"
+                    >
+                    <option value="expense">Expense</option>
+                    <option value="income">Income</option>
+                    </select>
 
-            <p
-              className={`font-bold ${
-                t.type === "income" ? "text-green-600" : "text-red-600"
-              }`}
-            >
-              {t.type === "income" ? "+" : "-"}₹{t.amount}
-            </p>
-          </li>
+                    <input
+                    value={editForm.category}
+                    onChange={(e) =>
+                        setEditForm({ ...editForm, category: e.target.value })
+                    }
+                    className="border p-1"
+                    />
+
+                    <input
+                    type="number"
+                    value={editForm.amount}
+                    onChange={(e) =>
+                        setEditForm({ ...editForm, amount: e.target.value })
+                    }
+                    className="border p-1"
+                    />
+
+                    <input
+                    type="date"
+                    value={editForm.transaction_date}
+                    onChange={(e) =>
+                        setEditForm({
+                        ...editForm,
+                        transaction_date: e.target.value,
+                        })
+                    }
+                    className="border p-1"
+                    />
+                </div>
+
+                <div className="flex gap-2">
+                    <button
+                    onClick={() => saveEdit(t.id)}
+                    className="bg-green-600 text-white px-3 py-1 rounded"
+                    >
+                    Save
+                    </button>
+                    <button
+                    onClick={cancelEdit}
+                    className="bg-gray-400 text-white px-3 py-1 rounded"
+                    >
+                    Cancel
+                    </button>
+                </div>
+                </>
+            ) : (
+                <div className="flex justify-between items-center">
+                <div>
+                    <p className="font-medium">
+                    {t.description || t.category}
+                    </p>
+                    <p className="text-sm text-gray-500">
+                    {t.category} • {t.transaction_date}
+                    </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                    <p
+                    className={`font-bold ${
+                        t.type === "income"
+                        ? "text-green-600"
+                        : "text-red-600"
+                    }`}
+                    >
+                    {t.type === "income" ? "+" : "-"}₹{t.amount}
+                    </p>
+
+                    <button
+                    onClick={() => startEdit(t)}
+                    className="text-blue-600"
+                    >
+                    Edit
+                    </button>
+
+                    <button
+                    onClick={() => handleDelete(t.id)}
+                    className="text-red-600"
+                    >
+                    Delete
+                    </button>
+                </div>
+                </div>
+            )}
+            </li>
         ))}
-      </ul>
+        </ul>
+
     </div>
   );
 }

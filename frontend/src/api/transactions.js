@@ -8,3 +8,6 @@ export const createTransaction = (data) =>
 
 export const deleteTransaction = (id) =>
   api.delete(`/transactions/${id}`);
+
+export const updateTransaction = (id, data) =>
+  api.put(`/transactions/${id}`, data);
