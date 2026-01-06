@@ -44,9 +44,9 @@ const FinanceTracker = () => {
   ]);
 
   const [savingsGoals, setSavingsGoals] = useState([
-    { id: 1, name: 'Emergency Fund', target: 100000, current: 35000, deadline: '2026-06-30' },
-    { id: 2, name: 'Vacation', target: 50000, current: 15000, deadline: '2026-08-15' },
-    { id: 3, name: 'New Laptop', target: 80000, current: 45000, deadline: '2026-03-31' },
+    { id: -1, goal_name: 'Emergency Fund', target_amount: 100000, current_amount: 35000, deadline: '2026-06-30' },
+    { id: -2, goal_name: 'Vacation', target_amount: 50000, current_amount: 15000, deadline: '2026-08-15' },
+    { id: -3, goal_name: 'New Laptop', target_amount: 80000, current_amount: 45000, deadline: '2026-03-31' },
   ]);
 
   const [newTransaction, setNewTransaction] = useState({
@@ -123,6 +123,24 @@ useEffect(() => {
       console.warn("Using mock budgets", err);
     });
 }, [token]);
+useEffect(() => {
+  if (!token) return;
+
+  fetch(`${API_BASE}/goals`, {
+    headers: authHeaders
+  })
+    .then(res => res.json())
+    .then(data => {
+      if (Array.isArray(data)) {
+        setSavingsGoals(data);
+        console.log("Goals loaded from backend");
+      }
+    })
+    .catch(err => {
+      console.warn("Using mock goals", err);
+    });
+}, [token]);
+
 
   const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1', '#ef4444'];
   
@@ -206,6 +224,7 @@ await fetch(`${API_BASE}/transactions`, {
   body: JSON.stringify(payload)
 });
 
+await loadBudgets();
 // 🔄 Re-fetch from backend
 const refreshed = await fetch(`${API_BASE}/transactions`, {
   headers: authHeaders
@@ -239,6 +258,7 @@ setTransactions(
         method: "DELETE",
         headers: authHeaders
         });
+        await loadBudgets();
     } catch (err) {
         console.error("Failed to delete transaction", err);
     }
@@ -297,18 +317,53 @@ const handleDeleteBudget = async (id) => {
   }
 };
 
-  const handleAddGoal = () => {
-    if (newGoal.name && newGoal.target && newGoal.deadline) {
-      setSavingsGoals([...savingsGoals, {
-        id: savingsGoals.length + 1,
-        name: newGoal.name,
-        target: parseFloat(newGoal.target),
-        current: 0,
-        deadline: newGoal.deadline
-      }]);
-      setNewGoal({ name: '', target: '', deadline: '' });
-    }
+const handleAddGoal = async () => {
+  if (!newGoal.name || !newGoal.target || !newGoal.deadline) return;
+
+  const payload = {
+    goal_name: newGoal.name,
+    target_amount: Number(newGoal.target),
+    deadline: newGoal.deadline
   };
+
+  // Optimistic UI
+  setSavingsGoals(prev => [
+    ...prev,
+    {
+      id: Date.now(),
+      goal_name: payload.goal_name,
+      target_amount: payload.target_amount,
+      current_amount: 0,
+      deadline: payload.deadline
+    }
+  ]);
+
+  try {
+    await fetch(`${API_BASE}/goals`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify(payload)
+    });
+  } catch (err) {
+    console.error("Failed to save goal", err);
+  }
+
+  setNewGoal({ name: "", target: "", deadline: "" });
+};
+
+const handleDeleteGoal = async (id) => {
+  setSavingsGoals(prev => prev.filter(g => g.id !== id));
+
+  try {
+    await fetch(`${API_BASE}/goals/${id}`, {
+      method: "DELETE",
+      headers: authHeaders
+    });
+  } catch (err) {
+    console.error("Failed to delete goal", err);
+  }
+};
+
 
   // Prepare chart data
   const categoryChartData = Object.entries(insights.categoryBreakdown).map(([name, value]) => ({
@@ -799,8 +854,8 @@ const handleUpdateTransaction = async () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {savingsGoals.map(goal => {
-                const percentage = (goal.current / goal.target) * 100;
-                const remaining = goal.target - goal.current;
+                const percentage = (goal.current_amount / goal.target_amount) * 100;
+                const remaining = goal.target_amount - goal.current_amount;
                 const daysUntilDeadline = Math.ceil((new Date(goal.deadline) - new Date()) / (1000 * 60 * 60 * 24));
                 const monthlyRequired = daysUntilDeadline > 0 ? Math.ceil(remaining / (daysUntilDeadline / 30)) : 0;
                 
@@ -810,7 +865,7 @@ const handleUpdateTransaction = async () => {
                       <div className="bg-gradient-to-br from-blue-500 to-purple-600 p-2 rounded-lg">
                         <Target className="text-white" size={20} />
                       </div>
-                      <h4 className="text-lg font-bold text-gray-800">{goal.name}</h4>
+                      <h4 className="text-lg font-bold text-gray-800">{goal.goal_name}</h4>
                     </div>
                     <div className="mb-3">
                       <div className="w-full bg-gray-200 rounded-full h-3">
@@ -827,16 +882,23 @@ const handleUpdateTransaction = async () => {
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Current:</span>
-                        <span className="font-medium text-gray-800">₹{goal.current.toLocaleString()}</span>
+                        <span className="font-medium text-gray-800">₹{goal.current_amount.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Target:</span>
-                        <span className="font-medium text-gray-800">₹{goal.target.toLocaleString()}</span>
+                        <span className="font-medium text-gray-800">₹{goal.target_amount.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Deadline:</span>
                         <span className="font-medium text-gray-800">{goal.deadline}</span>
                       </div>
+                      <button
+                        onClick={() => handleDeleteGoal(goal.id)}
+                        className="text-red-600 text-sm hover:underline"
+                        >
+                        Delete
+                      </button>
+
                     </div>
                     <div className="mt-4 p-3 bg-blue-50 rounded-lg">
                       <p className="text-sm text-blue-800">
@@ -961,11 +1023,11 @@ const handleUpdateTransaction = async () => {
                 <h4 className="font-bold text-gray-800 mb-4">🎯 Goal Progress Prediction</h4>
                 <div className="space-y-3">
                   {savingsGoals.map(goal => {
-                    const monthsToGoal = goal.target > goal.current ? 
-                      Math.ceil((goal.target - goal.current) / (insights.savingsRate / 100 * insights.totalIncome)) : 0;
+                    const monthsToGoal = goal.target_amount > goal.current_amount ? 
+                      Math.ceil((goal.target_amount - goal.current_amount) / (insights.savingsRate / 100 * insights.totalIncome)) : 0;
                     return (
                       <div key={goal.id} className="p-3 bg-gray-50 rounded-lg">
-                        <p className="font-medium text-gray-800">{goal.name}</p>
+                        <p className="font-medium text-gray-800">{goal.goal_name}</p>
                         <p className="text-sm text-gray-600">
                           Estimated completion: {monthsToGoal} months at current savings rate
                         </p>
