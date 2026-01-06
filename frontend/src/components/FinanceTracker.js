@@ -35,12 +35,12 @@ const FinanceTracker = () => {
   ]);
 
   const [budgets, setBudgets] = useState([
-    { category: 'Food & Dining', limit: 15000, spent: 2050 },
-    { category: 'Transportation', limit: 8000, spent: 850 },
-    { category: 'Entertainment', limit: 5000, spent: 2200 },
-    { category: 'Utilities', limit: 5000, spent: 3500 },
-    { category: 'Shopping', limit: 10000, spent: 4500 },
-    { category: 'Healthcare', limit: 8000, spent: 2000 },
+    { id:-1, category: 'Food & Dining', limit_amount: 15000, spent: 2050 },
+    { id: -2,category: 'Transportation', limit_amount: 8000, spent: 850 },
+    { id: -3, category: 'Entertainment', limit_amount: 5000, spent: 2200 },
+    { id: -4, category: 'Utilities', limit_amount: 5000, spent: 3500 },
+    { id: -5, category: 'Shopping', limit_amount: 10000, spent: 4500 },
+    { id: -6, category: 'Healthcare', limit_amount: 8000, spent: 2000 },
   ]);
 
   const [savingsGoals, setSavingsGoals] = useState([
@@ -106,6 +106,23 @@ useEffect(() => {
   }
 }, [editingTransaction]);
 
+useEffect(() => {
+  if (!token) return;
+
+  fetch(`${API_BASE}/budgets`, {
+    headers: authHeaders
+  })
+    .then(res => res.json())
+    .then(data => {
+      if (Array.isArray(data)) {
+        setBudgets(data);
+        console.log("Budgets loaded from backend");
+      }
+    })
+    .catch(err => {
+      console.warn("Using mock budgets", err);
+    });
+}, [token]);
 
   const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1', '#ef4444'];
   
@@ -146,7 +163,7 @@ useEffect(() => {
     const topCategory = Object.entries(categoryBreakdown).sort((a, b) => b[1] - a[1])[0];
 
     // Budget alerts
-    const budgetAlerts = budgets.filter(b => (b.spent / b.limit) > 0.8);
+    const budgetAlerts = budgets.filter(b => (b.spent / b.limit_amount) > 0.8);
 
     return {
       totalExpenses,
@@ -226,20 +243,59 @@ setTransactions(
         console.error("Failed to delete transaction", err);
     }
   };
+const loadBudgets = async () => {
+  try {
+    const res = await fetch(`${API_BASE}/budgets`, {
+      headers: authHeaders
+    });
+    const data = await res.json();
 
-  const handleAddBudget = () => {
-    if (newBudget.category && newBudget.limit) {
-      const existing = budgets.find(b => b.category === newBudget.category);
-      if (!existing) {
-        setBudgets([...budgets, { 
-          category: newBudget.category, 
-          limit: parseFloat(newBudget.limit),
-          spent: 0 
-        }]);
-      }
-      setNewBudget({ category: '', limit: '' });
+    if (Array.isArray(data)) {
+      setBudgets(data);
     }
+  } catch (err) {
+    console.error("Failed to load budgets", err);
+  }
+};
+
+const handleAddBudget = async () => {
+  if (!newBudget.category || !newBudget.limit) return;
+
+  const payload = {
+    category: newBudget.category,
+    limit_amount: Number(newBudget.limit)
   };
+
+  // Optimistic UI
+
+
+  try {
+    await fetch(`${API_BASE}/budgets`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify(payload)
+    });
+    await loadBudgets();
+  } catch (err) {
+    console.error("Failed to save budget", err);
+  }
+
+  setNewBudget({ category: "", limit: "" });
+};
+
+
+const handleDeleteBudget = async (id) => {
+  setBudgets(prev => prev.filter(b => b.id !== id));
+
+  try {
+    await fetch(`${API_BASE}/budgets/${id}`, {
+      method: "DELETE",
+      headers: authHeaders
+    });
+  } catch (err) {
+    console.error("Failed to delete budget", err);
+  }
+};
 
   const handleAddGoal = () => {
     if (newGoal.name && newGoal.target && newGoal.deadline) {
@@ -263,8 +319,8 @@ setTransactions(
   const budgetChartData = budgets.map(b => ({
     name: b.category,
     spent: b.spent,
-    limit: b.limit,
-    remaining: Math.max(0, b.limit - b.spent)
+    limit: b.limit_amount,
+    remaining: Math.max(0, b.limit_amount - b.spent)
   }));
 
   const cashFlowData = [
@@ -459,7 +515,7 @@ const handleUpdateTransaction = async () => {
                       <div key={alert.category} className="bg-orange-50 border border-orange-200 rounded-lg p-3">
                         <p className="font-medium text-orange-800">{alert.category}</p>
                         <p className="text-sm text-orange-600">
-                          {((alert.spent / alert.limit) * 100).toFixed(0)}% of budget used
+                          {((alert.spent / alert.limit_amount) * 100).toFixed(0)}% of budget used
                         </p>
                       </div>
                     ))}
@@ -661,7 +717,7 @@ const handleUpdateTransaction = async () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {budgets.map(budget => {
-                const percentage = (budget.spent / budget.limit) * 100;
+                const percentage = (budget.spent / budget.limit_amount) * 100;
                 const isOverBudget = percentage > 100;
                 const isWarning = percentage > 80 && percentage <= 100;
                 
@@ -691,8 +747,14 @@ const handleUpdateTransaction = async () => {
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-600">Spent: ₹{budget.spent.toLocaleString()}</span>
-                      <span className="text-gray-600">Limit: ₹{budget.limit.toLocaleString()}</span>
+                      <span className="text-gray-600">Limit: ₹{budget.limit_amount.toLocaleString()}</span>
                     </div>
+                    <button
+                        onClick={() => handleDeleteBudget(budget.id)}
+                        className="text-red-600 text-sm hover:underline"
+                        >
+                        Delete
+                    </button>
                   </div>
                 );
               })}
@@ -846,7 +908,7 @@ const handleUpdateTransaction = async () => {
                 <h4 className="font-bold text-gray-800 mb-3">Budget Health</h4>
                 <div className="text-center">
                   <div className="text-4xl font-bold text-green-600 mb-2">
-                    {budgets.filter(b => b.spent < b.limit).length}/{budgets.length}
+                    {budgets.filter(b => b.spent < b.limit_amount).length}/{budgets.length}
                   </div>
                   <div className="px-3 py-1 rounded-full text-sm inline-block bg-green-100 text-green-700">
                     Categories on Track

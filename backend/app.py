@@ -277,8 +277,6 @@ def get_budgets():
             FROM budgets b
             LEFT JOIN transactions t ON t.user_id = b.user_id 
             AND t.category = b.category 
-            AND MONTH(t.transaction_date) = MONTH(CURRENT_DATE())
-            AND YEAR(t.transaction_date) = YEAR(CURRENT_DATE())
             WHERE b.user_id = %s
             GROUP BY b.id""",
             (user_id,)
