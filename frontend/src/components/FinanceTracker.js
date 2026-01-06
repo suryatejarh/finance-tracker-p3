@@ -1,18 +1,28 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { PieChart, Pie, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, ResponsiveContainer } from 'recharts';
 import { TrendingUp, TrendingDown, DollarSign, Wallet, Target, AlertCircle, PlusCircle, Calendar, CreditCard, Award, Activity } from 'lucide-react';
 import { useNavigate } from "react-router-dom";
 import { LogOut } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
+// import { useEffect } from 'react';
 
 const FinanceTracker = () => {
+  const {token, userId, logout} = useAuth();
   const navigate = useNavigate();
-  const { logout } = useAuth();
-  const handleLogout = () => {
-  logout();
-  navigate("/login");
-};
+//   const { logout } = useAuth();
+    const handleLogout = () => {
+        logout();
+        navigate("/login");
+    };
+    
+    const API_BASE = "http://localhost:5000/api";
+
+    const authHeaders = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+    };
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [editingTransaction, setEditingTransaction] = useState(null);
   const [transactions, setTransactions] = useState([
     { id: 1, type: 'expense', category: 'Food & Dining', amount: 1250, date: '2026-01-01', description: 'Grocery shopping', merchant: 'Walmart' },
     { id: 2, type: 'expense', category: 'Transportation', amount: 850, date: '2026-01-02', description: 'Gas', merchant: 'Shell' },
@@ -50,6 +60,52 @@ const FinanceTracker = () => {
 
   const [newBudget, setNewBudget] = useState({ category: '', limit: '' });
   const [newGoal, setNewGoal] = useState({ name: '', target: '', deadline: '' });
+useEffect(() => {
+  if (!token) return;
+
+  const loadTransactions = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/transactions`, {
+        headers: authHeaders
+      });
+
+      if (!res.ok) throw new Error("Failed to fetch transactions");
+
+      const data = await res.json();
+
+      if (Array.isArray(data)) {
+        // 🔥 Normalize backend data → UI format
+        setTransactions(
+          data.map(t => ({
+            ...t,
+            date: t.transaction_date
+          }))
+        );
+      }
+    } catch (err) {
+      console.error("Backend fetch failed, using mock data", err);
+    }
+  };
+
+  loadTransactions();
+}, [token]);
+
+useEffect(() => {
+  if (editingTransaction) {
+    setNewTransaction({
+      type: editingTransaction.type || "expense",
+      category: editingTransaction.category || "Food & Dining",
+      amount: editingTransaction.amount?.toString() || "",
+      date:
+        editingTransaction.transaction_date || // ✅ backend field
+        editingTransaction.date ||              // fallback for mock data
+        new Date().toISOString().split("T")[0],
+      description: editingTransaction.description || "",
+      merchant: editingTransaction.merchant || ""
+    });
+  }
+}, [editingTransaction]);
+
 
   const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1', '#ef4444'];
   
@@ -108,30 +164,66 @@ const FinanceTracker = () => {
     };
   }, [transactions, budgets]);
 
-  const handleAddTransaction = () => {
-    if (newTransaction.amount && newTransaction.category) {
-      setTransactions([...transactions, {
-        id: transactions.length + 1,
-        ...newTransaction,
-        amount: parseFloat(newTransaction.amount)
-      }]);
-      
-      if (newTransaction.type === 'expense') {
-        setBudgets(budgets.map(b => 
-          b.category === newTransaction.category 
-            ? { ...b, spent: b.spent + parseFloat(newTransaction.amount) }
-            : b
-        ));
-      }
-      
-      setNewTransaction({
-        type: 'expense',
-        category: 'Food & Dining',
-        amount: '',
-        date: new Date().toISOString().split('T')[0],
-        description: '',
-        merchant: ''
-      });
+  const handleAddTransaction = async () => {
+        if (!newTransaction.amount || !newTransaction.category) return;
+
+        const payload = {
+        type: newTransaction.type,
+        category: newTransaction.category,
+        amount: Number(newTransaction.amount),
+        transaction_date: newTransaction.date,   // REQUIRED
+        description: newTransaction.description || "",
+        merchant: newTransaction.merchant || ""
+        };
+
+        // 1️⃣ Optimistic UI
+        setTransactions(prev => [
+            ...prev,
+            { id: Date.now(), ...payload }
+        ]);
+
+        // 2️⃣ Backend persistence
+await fetch(`${API_BASE}/transactions`, {
+  method: "POST",
+  headers: authHeaders,
+  body: JSON.stringify(payload)
+});
+
+// 🔄 Re-fetch from backend
+const refreshed = await fetch(`${API_BASE}/transactions`, {
+  headers: authHeaders
+});
+const data = await refreshed.json();
+
+setTransactions(
+  data.map(t => ({
+    ...t,
+    date: t.transaction_date
+  }))
+);
+
+
+        // 3️⃣ Reset form
+        setNewTransaction({
+            type: "expense",
+            category: "Food & Dining",
+            amount: "",
+            date: new Date().toISOString().split("T")[0],
+            description: "",
+            merchant: ""
+        });
+    };
+  const handleDeleteTransaction = async (id) => {
+  // Optimistic UI
+    setTransactions(prev => prev.filter(t => t.id !== id));
+
+    try {
+        await fetch(`${API_BASE}/transactions/${id}`, {
+        method: "DELETE",
+        headers: authHeaders
+        });
+    } catch (err) {
+        console.error("Failed to delete transaction", err);
     }
   };
 
@@ -181,6 +273,58 @@ const FinanceTracker = () => {
     { month: 'Dec', income: 45000, expenses: 43500 },
     { month: 'Jan (Projected)', income: 45000, expenses: insights.predictedMonthlyExpense }
   ];
+
+
+const handleUpdateTransaction = async () => {
+  if (!editingTransaction) return;
+
+  const payload = {
+    type: newTransaction.type,
+    category: newTransaction.category,
+    amount: Number(newTransaction.amount),
+    transaction_date: newTransaction.date,
+    description: newTransaction.description || "",
+    merchant: newTransaction.merchant || ""
+  };
+
+  // ✅ Optimistic UI (correct mapping)
+  setTransactions(prev =>
+    prev.map(t =>
+      t.id === editingTransaction.id
+        ? { ...t, ...payload, date: payload.transaction_date }
+        : t
+    )
+  );
+
+  try {
+    const res = await fetch(
+      `${API_BASE}/transactions/${editingTransaction.id}`,
+      {
+        method: "PUT",
+        headers: authHeaders,
+        body: JSON.stringify(payload)
+      }
+    );
+
+    if (!res.ok) {
+      throw new Error("Update failed");
+    }
+  } catch (err) {
+    console.error(err);
+    alert("Failed to update transaction on server");
+  }
+
+  setEditingTransaction(null);
+  setNewTransaction({
+    type: "expense",
+    category: "Food & Dining",
+    amount: "",
+    date: new Date().toISOString().split("T")[0],
+    description: "",
+    merchant: ""
+  });
+};
+
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
@@ -435,36 +579,51 @@ const FinanceTracker = () => {
                   className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               </div>
-              <button
-                onClick={handleAddTransaction}
-                className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-6 py-2 rounded-lg hover:from-blue-600 hover:to-purple-700 transition-all flex items-center gap-2"
-              >
+                <button
+                onClick={editingTransaction ? handleUpdateTransaction : handleAddTransaction}
+                className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-6 py-2 rounded-lg flex items-center gap-2"
+                >
                 <PlusCircle size={20} />
-                Add Transaction
-              </button>
+                {editingTransaction ? "Update Transaction" : "Add Transaction"}
+                </button>
             </div>
 
             <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
               <h3 className="text-xl font-bold text-gray-800 mb-4">Recent Transactions</h3>
               <div className="space-y-2">
                 {transactions.slice().reverse().map(t => (
-                  <div key={t.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-                    <div className="flex items-center gap-4">
-                      <div className={`p-2 rounded-lg ${t.type === 'income' ? 'bg-green-100' : 'bg-red-100'}`}>
-                        {t.type === 'income' ? 
-                          <TrendingUp className="text-green-600" size={20} /> : 
-                          <TrendingDown className="text-red-600" size={20} />
-                        }
-                      </div>
-                      <div>
+                    <div
+                        key={t.id}
+                        className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                    >
+                    <div>
                         <p className="font-medium text-gray-800">{t.description}</p>
-                        <p className="text-sm text-gray-500">{t.category} • {t.date}</p>
-                      </div>
+                        <p className="text-sm text-gray-500">
+                        {t.category} • {t.date}
+                        </p>
                     </div>
-                    <p className={`text-lg font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                      {t.type === 'income' ? '+' : '-'}₹{t.amount.toLocaleString()}
-                    </p>
-                  </div>
+
+                    <div className="flex items-center gap-3">
+                        <p className={`font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
+                        {t.type === 'income' ? '+' : '-'}₹{t.amount}
+                        </p>
+
+                        <button
+                        onClick={() => setEditingTransaction(t)}
+                        className="text-blue-600 hover:underline text-sm"
+                        >
+                        Edit
+                        </button>
+
+                        <button
+                        onClick={() => handleDeleteTransaction(t.id)}
+                        className="text-red-600 hover:underline text-sm"
+                        >
+                        Delete
+                        </button>
+                    </div>
+                    </div>
+
                 ))}
               </div>
             </div>
