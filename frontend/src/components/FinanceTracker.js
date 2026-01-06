@@ -60,6 +60,8 @@ const FinanceTracker = () => {
 
   const [newBudget, setNewBudget] = useState({ category: '', limit: '' });
   const [newGoal, setNewGoal] = useState({ name: '', target: '', deadline: '' });
+  const [analytics, setAnalytics] = useState(null);
+
 useEffect(() => {
   if (!token) return;
 
@@ -141,6 +143,21 @@ useEffect(() => {
     });
 }, [token]);
 
+useEffect(() => {
+  if (!token) return;
+
+  fetch(`${API_BASE}/analytics/dashboard`, {
+    headers: authHeaders
+  })
+    .then(res => res.json())
+    .then(data => {
+      setAnalytics(data);
+      console.log("Analytics loaded");
+    })
+    .catch(err => {
+      console.warn("Analytics fetch failed, using frontend fallback", err);
+    });
+}, [token]);
 
   const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1', '#ef4444'];
   
@@ -156,17 +173,26 @@ useEffect(() => {
       return tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
     });
 
+    const insights = analytics
+  ? {
+      totalIncome: analytics.monthly_stats.total_income || 0,
+      totalExpenses: analytics.monthly_stats.total_expenses || 0,
+      balance:
+        (analytics.monthly_stats.total_income || 0) -
+        (analytics.monthly_stats.total_expenses || 0),
+      transactionCount: analytics.monthly_stats.transaction_count || 0
+    }
+  : null;
+
+
     const expenses = currentMonthTransactions.filter(t => t.type === 'expense');
     const income = currentMonthTransactions.filter(t => t.type === 'income');
     
     const totalExpenses = expenses.reduce((sum, t) => sum + t.amount, 0);
     const totalIncome = income.reduce((sum, t) => sum + t.amount, 0);
     
-    // Category breakdown
-    const categoryBreakdown = {};
-    expenses.forEach(t => {
-      categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
-    });
+
+
 
     // Cash flow prediction (simple linear)
     const avgDailySpend = totalExpenses / new Date().getDate();
@@ -175,30 +201,52 @@ useEffect(() => {
     const predictedBalance = totalIncome - predictedMonthlyExpense;
 
     // Savings rate
-    const savingsRate = totalIncome > 0 ? ((totalIncome - totalExpenses) / totalIncome * 100) : 0;
-
-    // Top spending category
-    const topCategory = Object.entries(categoryBreakdown).sort((a, b) => b[1] - a[1])[0];
+   const savingsRate = insights
+  ? insights.totalIncome > 0
+    ? (
+        ((insights.totalIncome - insights.totalExpenses) /
+          insights.totalIncome) *
+        100
+      )
+    : 0
+  : 0;
 
     // Budget alerts
     const budgetAlerts = budgets.filter(b => (b.spent / b.limit_amount) > 0.8);
+    const topCategory = analytics?.category_breakdown?.length
+  ? analytics.category_breakdown.reduce(
+      (max, curr) => (curr.total > max.total ? curr : max),
+      analytics.category_breakdown[0]
+    )
+  : null;
 
-    return {
-      totalExpenses,
-      totalIncome,
-      balance: totalIncome - totalExpenses,
-      categoryBreakdown,
-      predictedMonthlyExpense: Math.round(predictedMonthlyExpense),
-      predictedBalance: Math.round(predictedBalance),
-      savingsRate: savingsRate.toFixed(1),
-      topCategory: topCategory ? topCategory[0] : 'N/A',
-      topCategoryAmount: topCategory ? topCategory[1] : 0,
-      budgetAlerts,
-      emergencyFund: 35000,
-      monthlyExpensesAvg: 40000
-    };
+return {
+  totalExpenses: insights?.totalExpenses ?? totalExpenses,
+  totalIncome: insights?.totalIncome ?? totalIncome,
+  balance: insights?.balance ?? (totalIncome - totalExpenses),
+
+  predictedMonthlyExpense: Math.round(predictedMonthlyExpense),
+  predictedBalance: Math.round(predictedBalance),
+
+  savingsRate: savingsRate.toFixed(1),
+
+  topCategory: topCategory ? topCategory.category : "N/A",
+  topCategoryAmount: topCategory ? topCategory.total : 0,
+
+  budgetAlerts,
+  emergencyFund: 35000,
+  monthlyExpensesAvg: 40000
+};
+
   }, [transactions, budgets]);
-
+    // Category breakdown
+const categoryChartData =
+  analytics && Array.isArray(analytics.category_breakdown)
+    ? analytics.category_breakdown.map(c => ({
+        name: c.category,
+        value: Math.round(c.total)
+      }))
+    : [];
   const handleAddTransaction = async () => {
         if (!newTransaction.amount || !newTransaction.category) return;
 
@@ -364,13 +412,6 @@ const handleDeleteGoal = async (id) => {
   }
 };
 
-
-  // Prepare chart data
-  const categoryChartData = Object.entries(insights.categoryBreakdown).map(([name, value]) => ({
-    name,
-    value: Math.round(value)
-  }));
-
   const budgetChartData = budgets.map(b => ({
     name: b.category,
     spent: b.spent,
@@ -499,6 +540,7 @@ const handleUpdateTransaction = async () => {
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             {/* Key Metrics */}
+            {insights && (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
                 <div className="flex items-center justify-between mb-2">
@@ -517,7 +559,7 @@ const handleUpdateTransaction = async () => {
                 <p className="text-3xl font-bold text-gray-800">₹{insights.totalExpenses.toLocaleString()}</p>
                 <p className="text-xs text-red-600 mt-1">This month</p>
               </div>
-
+            
               <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-gray-500 text-sm font-medium">Savings Rate</p>
@@ -540,7 +582,7 @@ const handleUpdateTransaction = async () => {
                 <p className="text-xs text-blue-600 mt-1">Months covered</p>
               </div>
             </div>
-
+            )}
             {/* Predictions & Alerts */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-6 shadow-lg text-white">
@@ -585,6 +627,7 @@ const handleUpdateTransaction = async () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
                 <h3 className="text-lg font-bold text-gray-800 mb-4">Spending by Category</h3>
+                {categoryChartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
                     <Pie
@@ -604,6 +647,9 @@ const handleUpdateTransaction = async () => {
                     <Tooltip formatter={(value) => `₹${value.toLocaleString()}`} />
                   </PieChart>
                 </ResponsiveContainer>
+                ) : (
+                    <p className="text-gray-500">No spending data available.</p>
+                )}
               </div>
 
               <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
