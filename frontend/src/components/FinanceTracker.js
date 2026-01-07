@@ -34,14 +34,9 @@ const FinanceTracker = () => {
     { id: 8, type: 'expense', category: 'Healthcare', amount: 2000, date: '2025-12-25', description: 'Doctor visit' },
   ]);
 
-  const [budgets, setBudgets] = useState([
-    { id:-1, category: 'Food & Dining', limit_amount: 15000, spent: 2050 },
-    { id: -2,category: 'Transportation', limit_amount: 8000, spent: 850 },
-    { id: -3, category: 'Entertainment', limit_amount: 5000, spent: 2200 },
-    { id: -4, category: 'Utilities', limit_amount: 5000, spent: 3500 },
-    { id: -5, category: 'Shopping', limit_amount: 10000, spent: 4500 },
-    { id: -6, category: 'Healthcare', limit_amount: 8000, spent: 2000 },
-  ]);
+  const [budgets, setBudgets] = useState([]);
+  const [goalProjections, setGoalProjections] = useState({});
+
 
   const [savingsGoals, setSavingsGoals] = useState([
     { id: -1, goal_name: 'Emergency Fund', target_amount: 100000, current_amount: 35000, deadline: '2026-06-30' },
@@ -61,6 +56,9 @@ const FinanceTracker = () => {
   const [newBudget, setNewBudget] = useState({ category: '', limit: '' });
   const [newGoal, setNewGoal] = useState({ name: '', target: '', deadline: '' });
   const [analytics, setAnalytics] = useState(null);
+  const [cashflowPrediction, setCashflowPrediction] = useState(null);
+  const [budgetRisks, setBudgetRisks] = useState([]);
+
 
 useEffect(() => {
   if (!token) return;
@@ -159,6 +157,42 @@ useEffect(() => {
     });
 }, [token]);
 
+useEffect(() => {
+  if (!token) return;
+
+  fetch(`${API_BASE}/predictions/cashflow-advanced`, {
+    headers: authHeaders
+  })
+    .then(res => res.json())
+    .then(setCashflowPrediction)
+    .catch(() => {});
+}, [token]);
+useEffect(() => {
+  if (!token) return;
+
+  fetch(`${API_BASE}/predictions/budget-risk`, {
+    headers: authHeaders
+  })
+    .then(res => res.json())
+    .then(setBudgetRisks)
+    .catch(() => {});
+}, [token]);
+
+const loadGoalProjection = async (goalId) => {
+  if (goalProjections[goalId]) return;
+
+  const res = await fetch(
+    `${API_BASE}/predictions/goal-timeline/${goalId}`,
+    { headers: authHeaders }
+  );
+  const data = await res.json();
+
+  setGoalProjections(prev => ({
+    ...prev,
+    [goalId]: data
+  }));
+};
+
   const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1', '#ef4444'];
   
   const categories = ['Food & Dining', 'Transportation', 'Entertainment', 'Utilities', 'Shopping', 'Healthcare', 'Education', 'Other'];
@@ -247,6 +281,14 @@ const categoryChartData =
         value: Math.round(c.total)
       }))
     : [];
+
+  const topCategory = analytics?.category_breakdown?.length
+  ? analytics.category_breakdown.reduce(
+      (max, curr) => (curr.total > max.total ? curr : max),
+      analytics.category_breakdown[0]
+    )
+  : null;
+
   const handleAddTransaction = async () => {
         if (!newTransaction.amount || !newTransaction.category) return;
 
@@ -477,6 +519,35 @@ const handleUpdateTransaction = async () => {
   });
 };
 
+const fetchGoalTimeline = async (goalId) => {
+  const res = await fetch(
+    `${API_BASE}/predictions/goal-timeline/${goalId}`,
+    { headers: authHeaders }
+  );
+  return res.json();
+};
+
+const savingsRate =
+  analytics && analytics.monthly_stats.total_income > 0
+    ? (
+        ((analytics.monthly_stats.total_income -
+          analytics.monthly_stats.total_expenses) /
+          analytics.monthly_stats.total_income) *
+        100
+      ).toFixed(1)
+    : "0.0";
+
+    const emergencyFundAmount =
+  savingsGoals.find(g => g.goal_name === "Emergency Fund")
+    ?.current_amount || 0;
+
+const monthlyExpenses =
+  analytics?.monthly_stats.total_expenses || 0;
+
+const emergencyMonths =
+  monthlyExpenses > 0
+    ? (emergencyFundAmount / monthlyExpenses).toFixed(1)
+    : "0.0";
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
@@ -577,13 +648,54 @@ const handleUpdateTransaction = async () => {
                   <Activity className="text-blue-500" size={20} />
                 </div>
                 <p className="text-3xl font-bold text-gray-800">
-                  {(insights.emergencyFund / insights.monthlyExpensesAvg).toFixed(1)} mo
+                  {emergencyMonths} mo
                 </p>
                 <p className="text-xs text-blue-600 mt-1">Months covered</p>
               </div>
             </div>
             )}
+            {cashflowPrediction && (
+  <div className="bg-white p-6 rounded-xl shadow border">
+    <h3 className="text-lg font-semibold mb-2">
+      🔮 Cashflow Prediction
+    </h3>
+
+    <div className="space-y-1 text-sm">
+      <p>
+        Predicted Expenses:{" "}
+        <strong>₹{cashflowPrediction.predicted_expenses?.toLocaleString()}</strong>
+      </p>
+
+      <p>
+        End-of-Month Balance:{" "}
+        <strong className={
+          cashflowPrediction.predicted_balance >= 0
+            ? "text-green-600"
+            : "text-red-600"
+        }>
+          ₹{cashflowPrediction.predicted_balance?.toLocaleString()}
+        </strong>
+      </p>
+
+      <p>Avg Daily Spend: ₹{cashflowPrediction.avg_daily_spend}</p>
+      <p>Days Remaining: {cashflowPrediction.days_remaining}</p>
+
+      <span
+        className={`inline-block mt-2 px-2 py-1 rounded text-xs font-medium
+        ${
+          cashflowPrediction.confidence === "high"
+            ? "bg-green-100 text-green-700"
+            : "bg-yellow-100 text-yellow-700"
+        }`}
+      >
+        Confidence: {cashflowPrediction.confidence}
+      </span>
+    </div>
+  </div>
+)}
+
             {/* Predictions & Alerts */}
+            {cashflowPrediction && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-6 shadow-lg text-white">
                 <div className="flex items-center gap-3 mb-4">
@@ -593,10 +705,10 @@ const handleUpdateTransaction = async () => {
                 <div className="space-y-3">
                   <div>
                     <p className="text-blue-100 text-sm">Predicted Month-End Balance</p>
-                    <p className="text-3xl font-bold">₹{insights.predictedBalance.toLocaleString()}</p>
+                    <p className="text-3xl font-bold">₹{cashflowPrediction?.predicted_balance?.toLocaleString() || "—"}</p>
                   </div>
                   <div className="bg-blue-400 bg-opacity-30 rounded-lg p-3">
-                    <p className="text-sm">Based on current spending patterns, you're on track to save ₹{insights.predictedBalance.toLocaleString()} this month.</p>
+                    <p className="text-sm">Based on current spending patterns, you're on track to save ₹{cashflowPrediction?.predicted_balance?.toLocaleString() || "—"} this month.</p>
                   </div>
                 </div>
               </div>
@@ -620,8 +732,17 @@ const handleUpdateTransaction = async () => {
                 ) : (
                   <p className="text-gray-500">All budgets are on track! 🎉</p>
                 )}
+                {budgetRisks
+                  .filter(r => r.category === budgets.category)
+                  .map((risk, idx) => (
+                    <p key={idx} className="text-sm text-red-600 mt-1">
+                      ⚠️ Likely to exceed by ₹{Math.round(risk.excess_amount)}
+                    </p>
+                ))}
+
               </div>
             </div>
+            )}
 
             {/* Charts */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -944,13 +1065,42 @@ const handleUpdateTransaction = async () => {
                         >
                         Delete
                       </button>
+                      <button
+                        onClick={async () => {
+                          const timeline = await fetchGoalTimeline(goal.id);
+
+                          alert(
+                            `Goal Status: ${timeline.status.toUpperCase()}\n\n` +
+                            `Remaining Amount: ₹${timeline.remaining_amount.toLocaleString()}\n\n` +
+
+                            `Conservative Plan:\n` +
+                            `• Months: ${timeline.conservative_timeline.months}\n` +
+                            `• Monthly Savings: ₹${Math.round(
+                              timeline.conservative_timeline.monthly_savings
+                            ).toLocaleString()}\n\n` +
+
+                            `Aggressive Plan:\n` +
+                            `• Months: ${timeline.aggressive_timeline.months}\n` +
+                            `• Monthly Savings: ₹${Math.round(
+                              timeline.aggressive_timeline.monthly_savings
+                            ).toLocaleString()}\n\n` +
+
+                            `Recommendation:\n${timeline.recommendation}`
+                          );
+                        }}
+                        className="text-blue-600 text-sm mt-2 hover:underline"
+                      >
+                        View Projection
+                      </button>
+
+
 
                     </div>
-                    <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                    {/* <div className="mt-4 p-3 bg-blue-50 rounded-lg">
                       <p className="text-sm text-blue-800">
                         <span className="font-bold">Save ₹{monthlyRequired.toLocaleString()}/month</span> to reach goal on time
                       </p>
-                    </div>
+                    </div> */}
                   </div>
                 );
               })}
@@ -966,12 +1116,12 @@ const handleUpdateTransaction = async () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-white bg-opacity-20 rounded-lg p-4">
                   <p className="text-sm opacity-90 mb-1">Top Spending Category</p>
-                  <p className="text-2xl font-bold">{insights.topCategory}</p>
-                  <p className="text-sm">₹{insights.topCategoryAmount.toLocaleString()} spent</p>
+                  <p className="text-2xl font-bold">{topCategory ? topCategory.category : "—"}</p>
+                  <p className="text-sm">₹{topCategory ? topCategory.total.toLocaleString() : "—"} spent</p>
                 </div>
                 <div className="bg-white bg-opacity-20 rounded-lg p-4">
                   <p className="text-sm opacity-90 mb-1">Predicted Monthly Spend</p>
-                  <p className="text-2xl font-bold">₹{insights.predictedMonthlyExpense.toLocaleString()}</p>
+                  <p className="text-2xl font-bold">₹{cashflowPrediction?.predicted_expenses?.toLocaleString() || "—"}</p>
                   <p className="text-sm">Based on current trends</p>
                 </div>
               </div>
@@ -979,51 +1129,73 @@ const handleUpdateTransaction = async () => {
 
             {/* Financial Health Score */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
-                <h4 className="font-bold text-gray-800 mb-3">Savings Rate</h4>
-                <div className="text-center">
-                  <div className="text-4xl font-bold text-blue-600 mb-2">{insights.savingsRate}%</div>
-                  <div className={`px-3 py-1 rounded-full text-sm inline-block ${
-                    insights.savingsRate >= 20 ? 'bg-green-100 text-green-700' :
-                    insights.savingsRate >= 10 ? 'bg-yellow-100 text-yellow-700' :
-                    'bg-red-100 text-red-700'
-                  }`}>
-                    {insights.savingsRate >= 20 ? 'Excellent' :
-                     insights.savingsRate >= 10 ? 'Good' : 'Needs Improvement'}
-                  </div>
-                </div>
-              </div>
 
-              <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
-                <h4 className="font-bold text-gray-800 mb-3">Emergency Fund</h4>
-                <div className="text-center">
-                  <div className="text-4xl font-bold text-purple-600 mb-2">
-                    {(insights.emergencyFund / insights.monthlyExpensesAvg).toFixed(1)}
-                  </div>
-                  <div className={`px-3 py-1 rounded-full text-sm inline-block ${
-                    (insights.emergencyFund / insights.monthlyExpensesAvg) >= 6 ? 'bg-green-100 text-green-700' :
-                    (insights.emergencyFund / insights.monthlyExpensesAvg) >= 3 ? 'bg-yellow-100 text-yellow-700' :
-                    'bg-red-100 text-red-700'
-                  }`}>
-                    {(insights.emergencyFund / insights.monthlyExpensesAvg) >= 6 ? 'Well Protected' :
-                     (insights.emergencyFund / insights.monthlyExpensesAvg) >= 3 ? 'Adequate' : 'Build More'}
-                  </div>
-                  <p className="text-xs text-gray-500 mt-2">Months of expenses</p>
-                </div>
-              </div>
+  {/* Savings Rate */}
+  <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
+    <h4 className="font-bold text-gray-800 mb-3">Savings Rate</h4>
+    <div className="text-center">
+      <div className="text-4xl font-bold text-blue-600 mb-2">
+        {savingsRate}%
+      </div>
+      <div
+        className={`px-3 py-1 rounded-full text-sm inline-block ${
+          savingsRate >= 20
+            ? "bg-green-100 text-green-700"
+            : savingsRate >= 10
+            ? "bg-yellow-100 text-yellow-700"
+            : "bg-red-100 text-red-700"
+        }`}
+      >
+        {savingsRate >= 20
+          ? "Excellent"
+          : savingsRate >= 10
+          ? "Good"
+          : "Needs Improvement"}
+      </div>
+    </div>
+  </div>
 
-              <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
-                <h4 className="font-bold text-gray-800 mb-3">Budget Health</h4>
-                <div className="text-center">
-                  <div className="text-4xl font-bold text-green-600 mb-2">
-                    {budgets.filter(b => b.spent < b.limit_amount).length}/{budgets.length}
-                  </div>
-                  <div className="px-3 py-1 rounded-full text-sm inline-block bg-green-100 text-green-700">
-                    Categories on Track
-                  </div>
-                </div>
-              </div>
-            </div>
+  {/* Emergency Fund */}
+  <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
+    <h4 className="font-bold text-gray-800 mb-3">Emergency Fund</h4>
+    <div className="text-center">
+      <div className="text-4xl font-bold text-purple-600 mb-2">
+        {emergencyMonths}
+      </div>
+      <div
+        className={`px-3 py-1 rounded-full text-sm inline-block ${
+          emergencyMonths >= 6
+            ? "bg-green-100 text-green-700"
+            : emergencyMonths >= 3
+            ? "bg-yellow-100 text-yellow-700"
+            : "bg-red-100 text-red-700"
+        }`}
+      >
+        {emergencyMonths >= 6
+          ? "Well Protected"
+          : emergencyMonths >= 3
+          ? "Adequate"
+          : "Build More"}
+      </div>
+      <p className="text-xs text-gray-500 mt-2">Months of expenses</p>
+    </div>
+  </div>
+
+  {/* Budget Health */}
+  <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
+    <h4 className="font-bold text-gray-800 mb-3">Budget Health</h4>
+    <div className="text-center">
+      <div className="text-4xl font-bold text-green-600 mb-2">
+        {budgets.filter(b => Number(b.spent ?? 0) <= Number(b.limit_amount??0)).length}/{budgets.length}
+      </div>
+      <div className="px-3 py-1 rounded-full text-sm inline-block bg-green-100 text-green-700">
+        Categories on Track
+      </div>
+    </div>
+  </div>
+
+</div>
+
 
             {/* Spending Patterns */}
             <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
@@ -1064,43 +1236,52 @@ const handleUpdateTransaction = async () => {
             </div>
 
             {/* Behavioral Insights */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
-                <h4 className="font-bold text-gray-800 mb-4">🎯 Goal Progress Prediction</h4>
-                <div className="space-y-3">
-                  {savingsGoals.map(goal => {
-                    const monthsToGoal = goal.target_amount > goal.current_amount ? 
-                      Math.ceil((goal.target_amount - goal.current_amount) / (insights.savingsRate / 100 * insights.totalIncome)) : 0;
-                    return (
-                      <div key={goal.id} className="p-3 bg-gray-50 rounded-lg">
-                        <p className="font-medium text-gray-800">{goal.goal_name}</p>
-                        <p className="text-sm text-gray-600">
-                          Estimated completion: {monthsToGoal} months at current savings rate
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+  <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
+    <h4 className="font-bold text-gray-800 mb-4">
+      🎯 Goal Progress Prediction
+    </h4>
 
-              <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
-                <h4 className="font-bold text-gray-800 mb-4">⚠️ Risk Assessment</h4>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center p-3 bg-green-50 rounded-lg">
-                    <span className="text-sm font-medium text-green-800">Financial Vulnerability</span>
-                    <span className="px-3 py-1 bg-green-200 text-green-800 rounded-full text-sm font-bold">Low</span>
-                  </div>
-                  <div className="flex justify-between items-center p-3 bg-green-50 rounded-lg">
-                    <span className="text-sm font-medium text-green-800">Emergency Preparedness</span>
-                    <span className="px-3 py-1 bg-green-200 text-green-800 rounded-full text-sm font-bold">Good</span>
-                  </div>
-                  <div className="flex justify-between items-center p-3 bg-yellow-50 rounded-lg">
-                    <span className="text-sm font-medium text-yellow-800">Budget Adherence</span>
-                    <span className="px-3 py-1 bg-yellow-200 text-yellow-800 rounded-full text-sm font-bold">Fair</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+    <div className="space-y-3">
+      {savingsGoals.map(goal => {
+        const projection = goalProjections[goal.id];
+
+        return (
+          <div
+            key={goal.id}
+            className="p-3 bg-gray-50 rounded-lg"
+          >
+            <p className="font-medium text-gray-800">
+              {goal.goal_name}
+            </p>
+
+            {projection ? (
+              <p className="text-sm text-gray-600">
+                Conservative:{" "}
+                <strong>
+                  {projection.conservative_timeline.months} months
+                </strong>{" "}
+                • Save ₹
+                {Math.round(
+                  projection.conservative_timeline.monthly_savings
+                ).toLocaleString()}
+                /month
+              </p>
+            ) : (
+              <button
+                onClick={() => loadGoalProjection(goal.id)}
+                className="text-sm text-blue-600 hover:underline mt-1"
+              >
+                Calculate projection
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  </div>
+</div>
+
 
             {/* Comparative Analysis */}
             <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
