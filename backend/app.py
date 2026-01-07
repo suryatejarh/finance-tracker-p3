@@ -8,9 +8,10 @@ from datetime import datetime, timedelta
 import numpy as np
 from sklearn.linear_model import LinearRegression
 import pandas as pd
-import os
+from predictions import FinancialPredictor
 
 app = Flask(__name__)
+financial_predictor = FinancialPredictor()
 app.config['JWT_SECRET_KEY'] = 'your-secret-key-change-in-production'
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 
@@ -32,6 +33,33 @@ def get_db_connection():
     except Error as e:
         print(f"Error connecting to MySQL: {e}")
         return None
+
+def get_user_transactions_df(user_id):
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT
+            transaction_date AS date,
+            amount,
+            type,
+            category,
+            merchant
+        FROM transactions
+        WHERE user_id = %s
+        ORDER BY transaction_date
+    """, (user_id,))
+
+    rows = cursor.fetchall()
+    cursor.close()
+    connection.close()
+
+    df = pd.DataFrame(rows)
+
+    if not df.empty:
+        df["amount"] = df["amount"].astype(float)
+
+    return df
 
 # ==================== Authentication Routes ====================
 
@@ -682,6 +710,81 @@ def get_spending_patterns():
     finally:
         cursor.close()
         connection.close()
+
+@app.route('/api/predictions/cashflow-advanced', methods=['GET'])
+@jwt_required()
+def cashflow_prediction_advanced():
+    user_id = get_jwt_identity()
+    df = get_user_transactions_df(user_id)
+
+    if df.empty:
+        return jsonify({
+            "confidence": "low",
+            "message": "Insufficient data"
+        }), 200
+
+    result = financial_predictor.predict_cash_flow(df)
+    return jsonify(result), 200
+
+@app.route('/api/predictions/budget-risk', methods=['GET'])
+@jwt_required()
+def budget_risk_prediction():
+    user_id = get_jwt_identity()
+    df = get_user_transactions_df(user_id)
+
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT category, limit_amount
+        FROM budgets
+        WHERE user_id = %s
+    """, (user_id,))
+    budgets = {row["category"]: float(row["limit_amount"]) for row in cursor.fetchall()}
+    cursor.close()
+    connection.close()
+
+    result = financial_predictor.predict_budget_overrun(df, budgets)
+    return jsonify(result), 200
+
+@app.route('/api/predictions/goal-timeline/<int:goal_id>', methods=['GET'])
+@jwt_required()
+def goal_timeline_prediction(goal_id):
+    user_id = get_jwt_identity()
+
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT current_amount, target_amount
+        FROM savings_goals
+        WHERE id = %s AND user_id = %s
+    """, (goal_id, user_id))
+    goal = cursor.fetchone()
+
+    cursor.execute("""
+        SELECT
+            SUM(CASE WHEN type='income' THEN amount ELSE 0 END) AS income,
+            SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) AS expense
+        FROM transactions
+        WHERE user_id = %s
+    """, (user_id,))
+    totals = cursor.fetchone()
+
+    cursor.close()
+    connection.close()
+
+    result = financial_predictor.calculate_savings_goal_timeline(
+        float(goal["current_amount"]),
+        float(goal["target_amount"]),
+        float(totals["income"] or 0),
+        float(totals["expense"] or 0)
+    )
+
+    return jsonify(result), 200
+
+
+
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
