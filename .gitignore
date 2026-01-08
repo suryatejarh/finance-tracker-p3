@@ -22,3 +22,57 @@ Thumbs.db
 
 # ---------- VS Code ----------
 .vscode/
+
+# =====================
+# Python virtual envs
+# =====================
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# =====================
+# Python cache / build
+# =====================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# =====================
+# Python packaging
+# =====================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =====================
+# Jupyter / ML artifacts
+# =====================
+.ipynb_checkpoints/
+*.joblib
+*.pkl
+*.pickle
+
+# =====================
+# Logs & temp files
+# =====================
+*.log
+*.tmp
+
+# =====================
+# OS / Editor junk
+# =====================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =====================
+# Environment variables
+# =====================
+.env
