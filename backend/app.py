@@ -47,7 +47,7 @@ def get_user_transactions_df(user_id):
             merchant
         FROM transactions
         WHERE user_id = %s
-        ORDER BY transaction_date
+        ORDER BY transaction_date DESC
     """, (user_id,))
 
     rows = cursor.fetchall()
@@ -782,7 +782,76 @@ def goal_timeline_prediction(goal_id):
 
     return jsonify(result), 200
 
+@app.route("/api/analytics/monthly-trend", methods=["GET"])
+@jwt_required()
+def get_monthly_trend():
+    user_id = int(get_jwt_identity())
 
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT 
+                DATE_FORMAT(transaction_date, '%Y-%m') as month,
+                SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
+                SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expenses
+            FROM transactions
+            WHERE user_id = %s
+            GROUP BY month
+            ORDER BY month ASC
+        """
+
+        cursor.execute(query, (user_id,))
+        results = cursor.fetchall()
+
+        return jsonify(results), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cursor.close()
+        connection.close()
+    
+@app.route("/api/predictions/spending-insights", methods=["GET"])
+@jwt_required()
+def spending_insights():
+    user_id = int(get_jwt_identity())
+
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute(
+            "SELECT transaction_date as date, amount, type, category FROM transactions WHERE user_id = %s",
+            (user_id,)
+        )
+
+        rows = cursor.fetchall()
+
+        if not rows:
+            return jsonify({}), 200
+
+        df = pd.DataFrame(rows)
+
+        predictor = FinancialPredictor()
+        insights = predictor.generate_spending_insights(df)
+
+        return jsonify(insights), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cursor.close()
+        connection.close()
 
 
 

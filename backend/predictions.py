@@ -4,6 +4,7 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from datetime import datetime, timedelta
+import calendar
 import json
 
 class FinancialPredictor:
@@ -45,7 +46,7 @@ class FinancialPredictor:
         expenses = current_month_data[current_month_data['type'] == 'expense']['amount'].sum()
         
         days_passed = datetime.now().day
-        days_in_month = (datetime(current_year, current_month + 1, 1) - timedelta(days=1)).day
+        days_in_month = calendar.monthrange(current_year, current_month)[1]
         
         # Linear projection
         avg_daily_expense = expenses / days_passed if days_passed > 0 else 0
