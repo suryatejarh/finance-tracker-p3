@@ -304,7 +304,9 @@ def get_budgets():
             COALESCE(SUM(CASE WHEN t.type = 'expense' THEN t.amount ELSE 0 END), 0) as spent
             FROM budgets b
             LEFT JOIN transactions t ON t.user_id = b.user_id 
-            AND t.category = b.category 
+            AND t.category = b.category
+            AND MONTH(t.transaction_date) = MONTH(CURRENT_DATE())
+            AND YEAR(t.transaction_date) = YEAR(CURRENT_DATE())
             WHERE b.user_id = %s
             GROUP BY b.id""",
             (user_id,)
@@ -376,9 +378,8 @@ def update_budget(budget_id):
         connection.commit()
         
         return jsonify({
-            'message': 'Budget updated',
-            'id': cursor.lastrowid
-        }), 201
+            'message': 'Budget updated'
+        }), 200
         
     except Error as e:
         return jsonify({'error': str(e)}), 500
@@ -407,7 +408,7 @@ def delete_budget(budget_id):
         return jsonify({
             'message': 'Budget deleted',
             'id': cursor.lastrowid
-        }), 201
+        }), 200
         
     except Error as e:
         return jsonify({'error': str(e)}), 500
@@ -466,9 +467,23 @@ def create_goal():
         )
         connection.commit()
         
+        cursor.execute(
+            """INSERT INTO savings_goals 
+            (user_id, goal_name, target_amount, current_amount, deadline)
+            VALUES (%s, %s, %s, %s, %s)""",
+            (user_id, data['goal_name'], data['target_amount'],
+            data.get('current_amount', 0), data['deadline'])
+        )
+        connection.commit()
+
+        goal_id = cursor.lastrowid
+
         return jsonify({
-            'message': 'Goal created',
-            'id': cursor.lastrowid
+            "id": goal_id,
+            "goal_name": data['goal_name'],
+            "target_amount": float(data['target_amount']),
+            "current_amount": float(data.get('current_amount', 0)),
+            "deadline": data['deadline']
         }), 201
         
     except Error as e:
@@ -536,7 +551,7 @@ def delete_goal(goal_id):
         return jsonify({
             'message': 'Goal deleted',
             'id': cursor.lastrowid
-        }), 201
+        }), 200
         
     except Error as e:
         return jsonify({'error': str(e)}), 500
@@ -720,11 +735,28 @@ def cashflow_prediction_advanced():
     if df.empty:
         return jsonify({
             "confidence": "low",
-            "message": "Insufficient data"
+            "message": "Insufficient data",
+            "historical_data": []
         }), 200
 
     result = financial_predictor.predict_cash_flow(df)
+    df['date'] = pd.to_datetime(df['date'])
+    monthly = df.groupby(
+        [df['date'].dt.year.rename('year'), df['date'].dt.month.rename('month'), 'type']
+    )['amount'].sum().unstack(fill_value=0).reset_index()
+
+    historical_data = []
+    for _, row in monthly.iterrows():
+        historical_data.append({
+            "month": f"{int(row['year'])}-{int(row['month']):02}",
+            "income": float(row.get('income', 0)),
+            "expenses": float(row.get('expense', 0))
+        })
+
+    result["historical_data"] = historical_data
+
     return jsonify(result), 200
+
 
 @app.route('/api/predictions/budget-risk', methods=['GET'])
 @jwt_required()
@@ -853,7 +885,183 @@ def spending_insights():
         cursor.close()
         connection.close()
 
+@app.route('/api/predictions/budget-risk', methods=['GET'])
+@jwt_required()
+def predict_budget_risk():
+    user_id = int(get_jwt_identity())
 
+    # Get user transactions as DataFrame
+    transactions_df = get_user_transactions_df(user_id)
+
+    if transactions_df.empty:
+        return jsonify([]), 200
+
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute(
+            "SELECT category, limit_amount FROM budgets WHERE user_id = %s",
+            (user_id,)
+        )
+        budgets = cursor.fetchall()
+
+        # Convert to dict format expected by predictor
+        budgets_dict = {
+            b['category']: float(b['limit_amount'])
+            for b in budgets
+        }
+
+        if not budgets_dict:
+            return jsonify([]), 200
+
+        risks = financial_predictor.predict_budget_overrun(
+            transactions_df,
+            budgets_dict
+        )
+
+        return jsonify(risks), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        cursor.close()
+        connection.close()
+@app.route('/api/predictions/spending-insights', methods=['GET'])
+@jwt_required()
+def get_spending_insights():
+    user_id = int(get_jwt_identity())
+
+    transactions_df = get_user_transactions_df(user_id)
+
+    if transactions_df.empty:
+        return jsonify({}), 200
+
+    try:
+        insights = financial_predictor.generate_spending_insights(
+            transactions_df
+        )
+
+        return jsonify(insights), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/predictions/goal-timeline/<int:goal_id>', methods=['GET'])
+@jwt_required()
+def predict_goal_timeline(goal_id):
+    user_id = int(get_jwt_identity())
+
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        # Get goal
+        cursor.execute("""
+            SELECT current_amount, target_amount
+            FROM savings_goals
+            WHERE id = %s AND user_id = %s
+        """, (goal_id, user_id))
+
+        goal = cursor.fetchone()
+
+        if not goal:
+            return jsonify({'error': 'Goal not found'}), 404
+
+        # Get monthly income & expenses (last 3 months avg)
+        cursor.execute("""
+            SELECT
+                DATE_FORMAT(transaction_date, '%Y-%m') as month,
+                SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as income,
+                SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) as expenses
+            FROM transactions
+            WHERE user_id = %s
+            GROUP BY month
+            ORDER BY month DESC
+            LIMIT 3
+        """, (user_id,))
+
+        monthly_data = cursor.fetchall()
+
+        if not monthly_data:
+            return jsonify({
+                "status": "insufficient_data",
+                "message": "Not enough transaction history"
+            }), 200
+
+        avg_income = sum(float(m['income']) for m in monthly_data) / len(monthly_data)
+        avg_expenses = sum(float(m['expenses']) for m in monthly_data) / len(monthly_data)
+
+        result = financial_predictor.calculate_savings_goal_timeline(
+            float(goal['current_amount']),
+            float(goal['target_amount']),
+            avg_income,
+            avg_expenses
+        )
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        cursor.close()
+        connection.close()
+@app.route('/api/predictions/spending-insights', methods=['GET'])
+@jwt_required()
+def spending_insights_advanced():
+    user_id = get_jwt_identity()
+    df = get_user_transactions_df(user_id)
+
+    if df.empty:
+        return jsonify({
+            "monthly_trend": "insufficient_data",
+            "weekend_vs_weekday": {
+                "weekend_avg": 0,
+                "weekday_avg": 0,
+                "difference_pct": 0
+            },
+            "impulse_spending_score": 0
+        }), 200
+
+    insights = financial_predictor.generate_spending_insights(df)
+    return jsonify(insights), 200
+
+@app.route('/api/goals/<int:goal_id>/contribute', methods=['POST'])
+@jwt_required()
+def contribute_to_goal(goal_id):
+    user_id = get_jwt_identity()
+    data = request.get_json()
+
+    amount = float(data.get('amount', 0))
+
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    # Insert contribution
+    cursor.execute("""
+        INSERT INTO goal_contributions
+        (user_id, goal_id, amount, contribution_date)
+        VALUES (%s, %s, %s, CURDATE())
+    """, (user_id, goal_id, amount))
+
+    # Update goal current_amount
+    cursor.execute("""
+        UPDATE savings_goals
+        SET current_amount = current_amount + %s
+        WHERE id = %s AND user_id = %s
+    """, (amount, goal_id, user_id))
+
+    connection.commit()
+
+    return jsonify({"message": "Contribution added"}), 200
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

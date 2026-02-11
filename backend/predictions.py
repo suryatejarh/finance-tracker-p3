@@ -190,7 +190,7 @@ class FinancialPredictor:
         current_month = datetime.now().month
         current_year = datetime.now().year
         current_day = datetime.now().day
-        days_in_month = (datetime(current_year, current_month + 1, 1) - timedelta(days=1)).day
+        days_in_month = calendar.monthrange(current_year, current_month)[1]
         
         at_risk = []
         
@@ -346,8 +346,8 @@ class FinancialPredictor:
     def _weekend_analysis(self, df):
         """Compare weekend vs weekday spending"""
         df['is_weekend'] = df['date'].dt.dayofweek >= 5
-        weekend_avg = df[df['is_weekend'] & (df['type'] == 'expense')]['amount'].mean()
-        weekday_avg = df[~df['is_weekend'] & (df['type'] == 'expense')]['amount'].mean()
+        weekend_avg = float(df[df['is_weekend'] & (df['type'] == 'expense')]['amount'].mean() or 0)
+        weekday_avg = float(df[~df['is_weekend'] & (df['type'] == 'expense')]['amount'].mean() or 0)
         
         return {
             "weekend_avg": round(weekend_avg, 2) if not np.isnan(weekend_avg) else 0,
@@ -365,8 +365,8 @@ class FinancialPredictor:
             return "insufficient_data"
         
         # Simple trend: compare last month to average
-        last_month = monthly.iloc[-1]
-        avg_previous = monthly.iloc[:-1].mean()
+        last_month = float(monthly.iloc[-1])
+        avg_previous = float(monthly.iloc[:-1].mean())
         
         change = (last_month / avg_previous - 1) * 100 if avg_previous > 0 else 0
         

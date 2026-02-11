@@ -27,6 +27,9 @@ const FinanceTracker = () => {
 
   const [budgets, setBudgets] = useState([]);
   const [goalProjections, setGoalProjections] = useState({});
+  const [contributionAmount, setContributionAmount] = useState("");
+  const [activeGoalId, setActiveGoalId] = useState(null);
+
   const [spendingInsights, setSpendingInsights] = useState(null);
 
 
@@ -67,6 +70,7 @@ useEffect(() => {
         setTransactions(
           data.map(t => ({
             ...t,
+            amount: Number(t.amount),
             date: t.transaction_date
           }))
         );
@@ -152,10 +156,19 @@ useEffect(() => {
   fetch(`${API_BASE}/predictions/cashflow-advanced`, {
     headers: authHeaders
   })
-    .then(res => res.json())
-    .then(setCashflowPrediction)
-    .catch(() => {});
+    .then(res => {
+      if (!res.ok) throw new Error("Cashflow fetch failed");
+      return res.json();
+    })
+    .then(data => {
+      setCashflowPrediction(data);
+      setCashFlowData(data.historical_data || []);
+    })
+    .catch(err => {
+      console.error("Cashflow prediction failed:", err);
+    });
 }, [token]);
+
 useEffect(() => {
   if (!token) return;
 
@@ -191,6 +204,45 @@ const loadGoalProjection = async (goalId) => {
     [goalId]: data
   }));
 };
+  const handleAddContribution = async () => {
+      if (!contributionAmount || !activeGoalId) return;
+
+      try {
+        const res = await fetch(
+          `${API_BASE}/goals/${activeGoalId}/contribute`,
+          {
+            method: "POST",
+            headers: authHeaders,
+            body: JSON.stringify({
+              amount: Number(contributionAmount)
+            })
+          }
+        );
+
+        if (!res.ok) throw new Error("Contribution failed");
+
+        // 🔥 Update goal locally (optimistic update)
+        setSavingsGoals(prev =>
+          prev.map(goal =>
+            goal.id === activeGoalId
+              ? {
+                  ...goal,
+                  current_amount:
+                    Number(goal.current_amount ?? 0) +
+                    Number(contributionAmount)
+                }
+              : goal
+          )
+        );
+
+        setContributionAmount("");
+        setActiveGoalId(null);
+
+      } catch (err) {
+        console.error(err);
+        alert("Failed to add contribution");
+      }
+    };
 
   const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1', '#ef4444'];
   
@@ -221,8 +273,8 @@ const loadGoalProjection = async (goalId) => {
     const expenses = currentMonthTransactions.filter(t => t.type === 'expense');
     const income = currentMonthTransactions.filter(t => t.type === 'income');
     
-    const totalExpenses = expenses.reduce((sum, t) => sum + t.amount, 0);
-    const totalIncome = income.reduce((sum, t) => sum + t.amount, 0);
+    const totalExpenses = expenses.reduce((sum, t) => sum + Number(t.amount||0), 0);
+    const totalIncome = income.reduce((sum, t) => sum + Number(t.amount||0), 0);
     
 
 
@@ -254,14 +306,14 @@ const loadGoalProjection = async (goalId) => {
   : null;
 
 return {
-  totalExpenses: insights?.totalExpenses ?? totalExpenses,
-  totalIncome: insights?.totalIncome ?? totalIncome,
-  balance: insights?.balance ?? (totalIncome - totalExpenses),
+  totalExpenses,
+  totalIncome,
+  balance: (totalIncome - totalExpenses),
 
   predictedMonthlyExpense: Math.round(predictedMonthlyExpense),
   predictedBalance: Math.round(predictedBalance),
 
-  savingsRate: savingsRate.toFixed(1),
+  savingsRate: Number(savingsRate.toFixed(1)),
 
   topCategory: topCategory ? topCategory.category : "N/A",
   topCategoryAmount: topCategory ? topCategory.total : 0,
@@ -269,7 +321,7 @@ return {
   budgetAlerts
 };
 
-  }, [transactions, budgets]);
+  }, [transactions, budgets, analytics]);
     // Category breakdown
 const categoryChartData =
   analytics && Array.isArray(analytics.category_breakdown)
@@ -279,12 +331,6 @@ const categoryChartData =
       }))
     : [];
 
-  const topCategory = analytics?.category_breakdown?.length
-  ? analytics.category_breakdown.reduce(
-      (max, curr) => (curr.total > max.total ? curr : max),
-      analytics.category_breakdown[0]
-    )
-  : null;
 
   const handleAddTransaction = async () => {
         if (!newTransaction.amount || !newTransaction.category) return;
@@ -301,7 +347,10 @@ const categoryChartData =
         // 1️⃣ Optimistic UI
         setTransactions(prev => [
             ...prev,
-            { id: Date.now(), ...payload }
+            { id: Date.now(), ...payload,
+              date: payload.transaction_date,
+              amount: Number(payload.amount)
+             }
         ]);
 
         // 2️⃣ Backend persistence
@@ -321,6 +370,7 @@ const data = await refreshed.json();
 setTransactions(
   data.map(t => ({
     ...t,
+    amount: Number(t.amount),
     date: t.transaction_date
   }))
 );
@@ -413,30 +463,28 @@ const handleAddGoal = async () => {
     deadline: newGoal.deadline
   };
 
-  // Optimistic UI
-  setSavingsGoals(prev => [
-    ...prev,
-    {
-      id: Date.now(),
-      goal_name: payload.goal_name,
-      target_amount: payload.target_amount,
-      current_amount: 0,
-      deadline: payload.deadline
-    }
-  ]);
-
   try {
-    await fetch(`${API_BASE}/goals`, {
+    const res = await fetch(`${API_BASE}/goals`, {
       method: "POST",
       headers: authHeaders,
       body: JSON.stringify(payload)
     });
+
+    const savedGoal = await res.json(); // 👈 get real DB goal
+    const normalizedGoal = {
+      ...savedGoal,
+      target_amount: Number(savedGoal.target_amount ?? payload.target_amount ?? 0),
+      current_amount: Number(savedGoal.current_amount ?? 0),
+    };
+    setSavingsGoals(prev => [...prev, normalizedGoal]);
+
   } catch (err) {
     console.error("Failed to save goal", err);
   }
 
   setNewGoal({ name: "", target: "", deadline: "" });
 };
+
 
 const handleDeleteGoal = async (id) => {
   setSavingsGoals(prev => prev.filter(g => g.id !== id));
@@ -474,7 +522,7 @@ const handleUpdateTransaction = async () => {
   setTransactions(prev =>
     prev.map(t =>
       t.id === editingTransaction.id
-        ? { ...t, ...payload, date: payload.transaction_date }
+        ? { ...t, ...payload, date: payload.transaction_date,amount: Number(payload.amount) }
         : t
     )
   );
@@ -516,15 +564,6 @@ const fetchGoalTimeline = async (goalId) => {
   return res.json();
 };
 
-const savingsRate =
-  analytics && analytics.monthly_stats.total_income > 0
-    ? (
-        ((analytics.monthly_stats.total_income -
-          analytics.monthly_stats.total_expenses) /
-          analytics.monthly_stats.total_income) *
-        100
-      ).toFixed(1)
-    : "0.0";
 
     const emergencyFundAmount =
   savingsGoals.find(g => g.goal_name === "Emergency Fund")
@@ -721,13 +760,7 @@ const emergencyMonths =
                 ) : (
                   <p className="text-gray-500">All budgets are on track! 🎉</p>
                 )}
-                {budgetRisks
-                  .filter(r => r.category === budgets.category)
-                  .map((risk, idx) => (
-                    <p key={idx} className="text-sm text-red-600 mt-1">
-                      ⚠️ Likely to exceed by ₹{Math.round(risk.excess_amount)}
-                    </p>
-                ))}
+
 
               </div>
             </div>
@@ -976,7 +1009,15 @@ const emergencyMonths =
                         >
                         Delete
                     </button>
+                                          {budgetRisks
+                        .filter(r => r.category === budget.category)
+                        .map((risk, idx) => (
+                          <p key={idx} className="text-sm text-red-600 mt-1">
+                            ⚠️ Likely to exceed by ₹{Math.round(risk.overrun_amount)}
+                          </p>
+                      ))}
                   </div>
+                  
                 );
               })}
             </div>
@@ -1020,8 +1061,10 @@ const emergencyMonths =
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {savingsGoals.map(goal => {
-                const percentage = (goal.current_amount / goal.target_amount) * 100;
-                const remaining = goal.target_amount - goal.current_amount;
+                const current=Number(goal.current_amount ?? 0);
+                const target=Number(goal.target_amount ?? 0);
+                const percentage = target > 0 ? (current / target) * 100 : 0;
+                const remaining = Number(goal.target_amount??0) - Number(goal.current_amount??0);
                 const daysUntilDeadline = Math.ceil((new Date(goal.deadline) - new Date()) / (1000 * 60 * 60 * 24));
                 const monthlyRequired = daysUntilDeadline > 0 ? Math.ceil(remaining / (daysUntilDeadline / 30)) : 0;
                 
@@ -1048,11 +1091,11 @@ const emergencyMonths =
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Current:</span>
-                        <span className="font-medium text-gray-800">₹{goal.current_amount.toLocaleString()}</span>
+                        <span className="font-medium text-gray-800">₹{Number(goal.current_amount??0).toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Target:</span>
-                        <span className="font-medium text-gray-800">₹{goal.target_amount.toLocaleString()}</span>
+                        <span className="font-medium text-gray-800">₹{Number(goal.target_amount??0).toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Deadline:</span>
@@ -1064,13 +1107,46 @@ const emergencyMonths =
                         >
                         Delete
                       </button>
+                      <div className="mt-3">
+                        {activeGoalId === goal.id ? (
+                          <div className="flex gap-2">
+                            <input
+                              type="number"
+                              placeholder="Amount"
+                              value={contributionAmount}
+                              onChange={(e) => setContributionAmount(e.target.value)}
+                              className="px-2 py-1 border rounded"
+                            />
+                            <button
+                              onClick={handleAddContribution}
+                              className="bg-green-500 text-white px-3 py-1 rounded"
+                            >
+                              Add
+                            </button>
+                            <button
+                              onClick={() => setActiveGoalId(null)}
+                              className="text-gray-500"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setActiveGoalId(goal.id)}
+                            className="text-green-600 text-sm hover:underline mt-2"
+                          >
+                            + Add Contribution
+                          </button>
+                        )}
+                      </div>
+
                       <button
                         onClick={async () => {
                           const timeline = await fetchGoalTimeline(goal.id);
 
                           alert(
                             `Goal Status: ${timeline.status.toUpperCase()}\n\n` +
-                            `Remaining Amount: ₹${timeline.remaining_amount.toLocaleString()}\n\n` +
+                            `Remaining Amount: ₹${Number(timeline.remaining_amount??0).toLocaleString()}\n\n` +
 
                             `Conservative Plan:\n` +
                             `• Months: ${timeline.conservative_timeline.months}\n` +
@@ -1115,12 +1191,12 @@ const emergencyMonths =
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-white bg-opacity-20 rounded-lg p-4">
                   <p className="text-sm opacity-90 mb-1">Top Spending Category</p>
-                  <p className="text-2xl font-bold">{topCategory ? topCategory.category : "—"}</p>
-                  <p className="text-sm">₹{topCategory ? topCategory.total.toLocaleString() : "—"} spent</p>
+                  <p className="text-2xl font-bold">{insights?.topCategory || "-"}</p>
+                  <p className="text-sm">₹{insights?.topCategoryAmount?.toLocaleString() || "-"} spent</p>
                 </div>
                 <div className="bg-white bg-opacity-20 rounded-lg p-4">
                   <p className="text-sm opacity-90 mb-1">Predicted Monthly Spend</p>
-                  <p className="text-2xl font-bold">₹{cashflowPrediction?.predicted_expenses?.toLocaleString() || "—"}</p>
+                  <p className="text-2xl font-bold">₹{cashflowPrediction?.predicted_expenses?.toLocaleString() || "-"}</p>
                   <p className="text-sm">Based on current trends</p>
                 </div>
               </div>
@@ -1134,20 +1210,20 @@ const emergencyMonths =
     <h4 className="font-bold text-gray-800 mb-3">Savings Rate</h4>
     <div className="text-center">
       <div className="text-4xl font-bold text-blue-600 mb-2">
-        {savingsRate}%
+        {insights?.savingsRate??0}%
       </div>
       <div
         className={`px-3 py-1 rounded-full text-sm inline-block ${
-          savingsRate >= 20
+          (insights?.savingsRate??0) >= 20
             ? "bg-green-100 text-green-700"
-            : savingsRate >= 10
+            : (insights?.savingsRate??0) >= 10
             ? "bg-yellow-100 text-yellow-700"
             : "bg-red-100 text-red-700"
         }`}
       >
-        {savingsRate >= 20
+        {(insights?.savingsRate??0) >= 20
           ? "Excellent"
-          : savingsRate >= 10
+          : (insights?.savingsRate??0) >= 10
           ? "Good"
           : "Needs Improvement"}
       </div>
