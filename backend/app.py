@@ -1064,4 +1064,4 @@ def contribute_to_goal(goal_id):
     return jsonify({"message": "Contribution added"}), 200
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run()
