@@ -15,7 +15,7 @@ const FinanceTracker = () => {
         navigate("/login");
     };
     
-    const API_BASE = "http://localhost:5000/api";
+    const API_BASE = "https://personal-finance-tracker-gbi4.onrender.com/api";
 
     const authHeaders = {
         "Content-Type": "application/json",
