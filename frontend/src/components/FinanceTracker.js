@@ -1065,9 +1065,7 @@ const emergencyMonths =
                 const current=Number(goal.current_amount ?? 0);
                 const target=Number(goal.target_amount ?? 0);
                 const percentage = target > 0 ? (current / target) * 100 : 0;
-                const remaining = Number(goal.target_amount??0) - Number(goal.current_amount??0);
-                const daysUntilDeadline = Math.ceil((new Date(goal.deadline) - new Date()) / (1000 * 60 * 60 * 24));
-                const monthlyRequired = daysUntilDeadline > 0 ? Math.ceil(remaining / (daysUntilDeadline / 30)) : 0;
+               
                 
                 return (
                   <div key={goal.id} className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
