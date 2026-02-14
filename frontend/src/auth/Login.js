@@ -25,7 +25,7 @@ export default function Login() {
       setError(data.error);
     } else {
       login(data.user, data.access_token);
-      navigate("/");
+      navigate("/dashboard");
     }
   };
 
