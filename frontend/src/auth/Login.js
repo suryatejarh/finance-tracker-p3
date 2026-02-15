@@ -13,7 +13,7 @@ export default function Login() {
     e.preventDefault();
     setError("");
 
-    const res = await fetch("https://personal-finance-tracker-gbi4.onrender.com/api/auth/login", {
+    const res = await fetch("https://finance-tracker-p3.onrender.com/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
