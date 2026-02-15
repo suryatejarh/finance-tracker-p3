@@ -14,7 +14,7 @@ export default function Register() {
     e.preventDefault();
     setError("");
 
-    const res = await fetch("https://personal-finance-tracker-gbi4.onrender.com/api/auth/register", {
+    const res = await fetch("https://finance-tracker-p3.onrender.com/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, email, password }),

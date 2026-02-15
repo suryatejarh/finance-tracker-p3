@@ -15,7 +15,7 @@ const FinanceTracker = () => {
         navigate("/login");
     };
     
-    const API_BASE = "https://personal-finance-tracker-gbi4.onrender.com/api";
+    const API_BASE = "https://finance-tracker-p3.onrender.com/api";
 
     const authHeaders = useMemo(() => ({
       "Content-Type": "application/json",
