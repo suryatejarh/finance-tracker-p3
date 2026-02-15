@@ -31,7 +31,7 @@ DB_CONFIG = {
 
 def get_db_connection():
     try:
-        connection = mysql.connector.connect(**DB_CONFIG)
+        connection = mysql.connector.connect(**DB_CONFIG,ssl_disabled=False)
         return connection
     except Error as e:
         print(f"Error connecting to MySQL: {e}")
