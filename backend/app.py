@@ -9,10 +9,12 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 import pandas as pd
 from predictions import FinancialPredictor
+import os
 
 app = Flask(__name__)
 financial_predictor = FinancialPredictor()
-app.config['JWT_SECRET_KEY'] = 'your-secret-key-change-in-production'
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 
 CORS(app)
@@ -20,10 +22,11 @@ jwt = JWTManager(app)
 
 # Database configuration
 DB_CONFIG = {
-    'host': 'localhost',
-    'database': 'finance_tracker_p3',
-    'user': 'root',
-    'password': 'root@123'
+    'host': os.environ.get('DB_HOST'),
+    'port': int(os.environ.get('DB_PORT', 3306)),
+    'database': os.environ.get('DB_NAME'),
+    'user': os.environ.get('DB_USER'),
+    'password': os.environ.get('DB_PASSWORD')
 }
 
 def get_db_connection():
@@ -1064,4 +1067,5 @@ def contribute_to_goal(goal_id):
     return jsonify({"message": "Contribution added"}), 200
 
 if __name__ == '__main__':
-    app.run()
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
